@@ -1,6 +1,7 @@
 using Microsoft.Win32;
 using System.IO;
 using System.Windows;
+using TateScribe.Core.Projects;
 using TateScribe.Infrastructure.Import;
 using TateScribe.Infrastructure.Storage;
 
@@ -9,19 +10,23 @@ namespace TateScribe.App;
 public partial class MainWindow : Window
 {
     private string? _projectDirectory;
+    private List<ProjectPage> _pages = [];
 
     public MainWindow()
     {
         InitializeComponent();
     }
 
-    private void CreateProject(object sender, RoutedEventArgs e)
+    private async void CreateProject(object sender, RoutedEventArgs e)
     {
         var dialog = new OpenFolderDialog { Title = "TateScribe プロジェクト用フォルダーを選択" };
         if (dialog.ShowDialog(this) == true)
         {
             _projectDirectory = dialog.FolderName;
             Title = $"TateScribe — {_projectDirectory}";
+            await using var repository = await SqliteProjectRepository.CreateAsync(_projectDirectory, CancellationToken.None);
+            _pages = (await repository.LoadPagesAsync(CancellationToken.None)).ToList();
+            RefreshPages();
         }
     }
 
@@ -45,8 +50,8 @@ public partial class MainWindow : Window
                 var pages = await new ImageImporter().ImportAsync(dialog.FileNames, CancellationToken.None);
                 await using var repository = await SqliteProjectRepository.CreateAsync(_projectDirectory, CancellationToken.None);
                 await repository.SavePagesAsync(pages, CancellationToken.None);
-                PageList.ItemsSource = pages;
-                PageList.DisplayMemberPath = "FileName";
+                _pages = pages.ToList();
+                RefreshPages();
             }
             catch (Exception exception)
             {
@@ -58,4 +63,20 @@ public partial class MainWindow : Window
             }
         }
     }
+
+    private async void MovePageUp(object sender, RoutedEventArgs e) => await MoveSelectedPageAsync(-1);
+
+    private async void MovePageDown(object sender, RoutedEventArgs e) => await MoveSelectedPageAsync(1);
+
+    private async Task MoveSelectedPageAsync(int offset)
+    {
+        if (_projectDirectory is null || PageList.SelectedItem is not ProjectPage selected) return;
+        _pages = PageOrderEditor.Move(_pages, selected.Id, offset).ToList();
+        await using var repository = await SqliteProjectRepository.CreateAsync(_projectDirectory, CancellationToken.None);
+        await repository.SavePagesAsync(_pages, CancellationToken.None);
+        RefreshPages();
+        PageList.SelectedItem = _pages.Single(page => page.Id == selected.Id);
+    }
+
+    private void RefreshPages() => PageList.ItemsSource = _pages.OrderBy(page => page.SortOrder).ToArray();
 }

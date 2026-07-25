@@ -11,7 +11,11 @@
     <DockPanel Grid.Column="0">
       <Button DockPanel.Dock="Top" Margin="0,0,0,8" Padding="12,6" Click="CreateProject">プロジェクトを作成／開く</Button>
       <Button DockPanel.Dock="Top" Margin="0,0,0,12" Padding="12,6" Click="ImportImages">画像を追加</Button>
-      <ListBox x:Name="PageList" DisplayMemberPath="Name" />
+      <StackPanel DockPanel.Dock="Bottom" Orientation="Horizontal" HorizontalAlignment="Center" Margin="0,12,0,0">
+        <Button Padding="12,6" Margin="0,0,8,0" Click="MovePageUp">上へ</Button>
+        <Button Padding="12,6" Click="MovePageDown">下へ</Button>
+      </StackPanel>
+      <ListBox x:Name="PageList" DisplayMemberPath="FileName" />
     </DockPanel>
     <Border Grid.Column="2" BorderBrush="Gray" BorderThickness="1" CornerRadius="4" Padding="24">
       <StackPanel VerticalAlignment="Center" HorizontalAlignment="Center">
