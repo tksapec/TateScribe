@@ -26,7 +26,11 @@ public sealed class ScreenshotPreprocessorTests : IDisposable
 
     public void Dispose()
     {
-        if (Directory.Exists(_cacheDirectory)) Directory.Delete(_cacheDirectory, true);
+        for (var attempt = 0; attempt < 5 && Directory.Exists(_cacheDirectory); attempt++)
+        {
+            try { Directory.Delete(_cacheDirectory, true); }
+            catch (IOException) { Thread.Sleep(100); }
+        }
     }
 
     private static string FindRepositoryRoot()
