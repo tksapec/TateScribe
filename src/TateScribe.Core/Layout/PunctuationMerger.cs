@@ -4,7 +4,7 @@ namespace TateScribe.Core.Layout;
 
 public static class PunctuationMerger
 {
-    private const string Punctuation = "、。！？";
+    private const string PunctuationAndQuotes = "\u3001\u3002\uFF01\uFF1F\u300C\u300D\u300E\u300F\uFF08\uFF09\u2026";
 
     public static string Merge(string primary, string auxiliary, int lookAhead)
     {
@@ -13,37 +13,39 @@ public static class PunctuationMerger
         var primaryIndex = 0;
         var previousMatch = -1;
         var matchedCount = 0;
-        var pendingPunctuation = new StringBuilder();
+        var pendingSupplementaryCharacters = new StringBuilder();
 
         foreach (var character in auxiliary)
         {
-            if (Punctuation.Contains(character))
+            var match = primary.IndexOf(character, primaryIndex, Math.Min(lookAhead, primary.Length - primaryIndex));
+            if (IsSupplementaryCharacter(character) && match < 0)
             {
-                pendingPunctuation.Append(character);
+                pendingSupplementaryCharacters.Append(character);
                 continue;
             }
 
-            var match = primary.IndexOf(character, primaryIndex, Math.Min(lookAhead, primary.Length - primaryIndex));
             if (match < 0)
             {
-                pendingPunctuation.Clear();
+                pendingSupplementaryCharacters.Clear();
                 continue;
             }
 
-            if (pendingPunctuation.Length > 0 && previousMatch >= 0)
+            if (pendingSupplementaryCharacters.Length > 0)
             {
-                if (!insertions.TryGetValue(previousMatch + 1, out var punctuation)) insertions[previousMatch + 1] = punctuation = new StringBuilder();
-                punctuation.Append(pendingPunctuation);
+                var insertionIndex = previousMatch >= 0 ? previousMatch + 1 : match;
+                if (!insertions.TryGetValue(insertionIndex, out var supplementaryCharacters))
+                    insertions[insertionIndex] = supplementaryCharacters = new StringBuilder();
+                supplementaryCharacters.Append(pendingSupplementaryCharacters);
             }
-            pendingPunctuation.Clear();
+            pendingSupplementaryCharacters.Clear();
             previousMatch = match;
             primaryIndex = match + 1;
             matchedCount++;
         }
 
-        if (pendingPunctuation.Length > 0 && previousMatch == primary.Length - 1 && matchedCount == primary.Length)
+        if (pendingSupplementaryCharacters.Length > 0 && previousMatch == primary.Length - 1 && matchedCount == primary.Length)
         {
-            insertions[primary.Length] = pendingPunctuation;
+            insertions[primary.Length] = pendingSupplementaryCharacters;
         }
 
         var result = new StringBuilder(primary.Length + insertions.Sum(pair => pair.Value.Length));
@@ -54,4 +56,11 @@ public static class PunctuationMerger
         }
         return result.ToString();
     }
+
+    private static bool IsSupplementaryCharacter(char character) =>
+        PunctuationAndQuotes.Contains(character)
+        || character is >= '\u3041' and <= '\u3049'
+        || character is '\u3063' or >= '\u3083' and <= '\u3087' or '\u308E' or '\u3095' or '\u3096'
+        || character is >= '\u30A1' and <= '\u30A9'
+        || character is '\u30C3' or >= '\u30E3' and <= '\u30E7' or '\u30EE' or '\u30F5' or '\u30F6';
 }

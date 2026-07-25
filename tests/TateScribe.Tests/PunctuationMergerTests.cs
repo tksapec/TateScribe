@@ -19,4 +19,20 @@ public sealed class PunctuationMergerTests
 
         Assert.Equal("私は学生です", result);
     }
+
+    [Fact]
+    public void Merge_inserts_matching_opening_and_closing_quotes()
+    {
+        var result = PunctuationMerger.Merge("島崎わたしは言った", "「島崎わたしは言った」", 16);
+
+        Assert.Equal("「島崎わたしは言った」", result);
+    }
+
+    [Fact]
+    public void Merge_inserts_a_missing_small_kana_between_matching_characters()
+    {
+        var result = PunctuationMerger.Merge("きっと", "きゃっと", 16);
+
+        Assert.Equal("きゃっと", result);
+    }
 }
