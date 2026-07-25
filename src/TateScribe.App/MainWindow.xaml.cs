@@ -47,6 +47,8 @@ public partial class MainWindow : Window
                 }
             }
             RefreshPages();
+            var missingSourceCount = _pages.Count(page => !File.Exists(page.SourcePath));
+            if (missingSourceCount > 0) ReviewStatus.Text = $"要確認: 元画像が見つからないページが {missingSourceCount} 件あります。";
         }
     }
 
@@ -128,6 +130,13 @@ public partial class MainWindow : Window
     private async void PageSelectionChanged(object sender, System.Windows.Controls.SelectionChangedEventArgs e)
     {
         if (_projectDirectory is null || PageList.SelectedItem is not ProjectPage selected) return;
+        if (!File.Exists(selected.SourcePath))
+        {
+            PagePreview.Source = null;
+            TextEditor.Text = string.Empty;
+            ReviewStatus.Text = $"要確認: 元画像が見つかりません。{selected.SourcePath}";
+            return;
+        }
         await using var repository = await SqliteProjectRepository.CreateAsync(_projectDirectory, CancellationToken.None);
         var textState = await repository.LoadPageTextStateAsync(selected.Id, CancellationToken.None);
         var reconstruction = VerticalTextReconstruction.Reconstruct(textState.MachineWords, 20, 0.75);
@@ -214,6 +223,7 @@ public partial class MainWindow : Window
             {
                 var page = pages[index];
                 ReviewStatus.Text = $"OCR実行中: {index + 1}/{pages.Count} {page.FileName}";
+                if (!File.Exists(page.SourcePath)) throw new FileNotFoundException("OCR対象の元画像が見つかりません。", page.SourcePath);
                 var prepared = await preprocessor.PrepareAsync(page.SourcePath, cacheDirectory, NormalizedCrop.Full, page.RotationDegrees, _ocrCancellation.Token);
                 var result = await worker.RecognizeAsync(new OcrRequest(Guid.NewGuid().ToString("N"), "paddle", prepared.CachePath), _ocrCancellation.Token);
                 await repository.ReplaceOcrWordsAsync(page.Id, result.Engine, result.ModelVersion, result.Words, _ocrCancellation.Token);
@@ -231,6 +241,10 @@ public partial class MainWindow : Window
         catch (OperationCanceledException)
         {
             ReviewStatus.Text = "OCRを中止しました。完了済みのOCR結果は保持されています。";
+        }
+        catch (Exception exception)
+        {
+            MessageBox.Show(this, exception.Message, "OCRを実行できません", MessageBoxButton.OK, MessageBoxImage.Error);
         }
         finally
         {
