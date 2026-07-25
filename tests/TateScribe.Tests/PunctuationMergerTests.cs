@@ -171,4 +171,28 @@ public sealed class PunctuationMergerTests
 
         Assert.Equal("「歯を大切にしましょう」の啓発", result);
     }
+
+    [Fact]
+    public void Merge_recovers_a_long_vowel_when_auxiliary_has_an_adjacent_body_error()
+    {
+        var result = PunctuationMerger.Merge("会議テブル", "会識テナーブル", 16);
+
+        Assert.Equal("会議テーブル", result);
+    }
+
+    [Fact]
+    public void Merge_recovers_leading_quotes_without_copying_auxiliary_body_errors()
+    {
+        var result = PunctuationMerger.Merge("原島はいったいつものことさ", "原島はいった。「ハつものことさ」9", 16);
+
+        Assert.Equal("原島はいった。「いつものことさ」", result);
+    }
+
+    [Fact]
+    public void Merge_does_not_move_a_supplementary_character_past_an_auxiliary_body_error()
+    {
+        var result = PunctuationMerger.Merge("漢字本文", "漢子ゃ本文", 16);
+
+        Assert.Equal("漢字本文", result);
+    }
 }

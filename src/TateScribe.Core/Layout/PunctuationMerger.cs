@@ -6,6 +6,7 @@ public static class PunctuationMerger
 {
     private const string PunctuationAndQuotes = "\u3001\u3002\uFF01\uFF1F\u300C\u300D\u300E\u300F\uFF08\uFF09\u2026\u30FC\n";
     private const int MaximumAlignmentCells = 4_000_000;
+    private const int MaximumTrustedSupplementaryGapLength = 12;
 
     public static string Merge(string primary, string auxiliary, int lookAhead)
     {
@@ -99,9 +100,43 @@ public static class PunctuationMerger
             return;
         }
 
+        if (primaryGap.Length <= MaximumTrustedSupplementaryGapLength
+            && auxiliaryGap.Length <= MaximumTrustedSupplementaryGapLength
+            && TryAddTrustedSupplementaryGap(primary, primaryGap, auxiliaryGap, primaryStart, primaryEnd, insertions))
+            return;
+
         var leadingSupplementaryCharacterCount = LeadingSupplementaryCharacterCount(auxiliaryGap);
         if (primaryGap.Length == auxiliaryGap.Length - leadingSupplementaryCharacterCount && leadingSupplementaryCharacterCount > 0 && ContainsOnlyOpeningQuoteMarkers(auxiliaryGap[..leadingSupplementaryCharacterCount]))
             AddInsertion(insertions, primaryStart, auxiliaryGap[..leadingSupplementaryCharacterCount]);
+    }
+
+    private static bool TryAddTrustedSupplementaryGap(string primary, ReadOnlySpan<char> primaryGap, ReadOnlySpan<char> auxiliaryGap, int primaryStart, int primaryEnd, Dictionary<int, StringBuilder> insertions)
+    {
+        if (primaryGap.IsEmpty)
+        {
+            if (primaryStart > 0
+                && primaryEnd < primary.Length
+                && IsKatakana(primary[primaryStart - 1])
+                && IsKatakana(primary[primaryEnd])
+                && auxiliaryGap.Contains('\u30FC'))
+            {
+                AddInsertion(insertions, primaryStart, "\u30FC".AsSpan());
+                return true;
+            }
+            if (primaryEnd == primary.Length && auxiliaryGap.Contains('\u300D'))
+            {
+                AddInsertion(insertions, primaryStart, "\u300D".AsSpan());
+                return true;
+            }
+            return false;
+        }
+
+        var leadingSupplementaryCharacterCount = LeadingSupplementaryCharacterCount(auxiliaryGap);
+        if (primaryGap.Length > 2
+            || leadingSupplementaryCharacterCount == 0
+            || !auxiliaryGap[..leadingSupplementaryCharacterCount].Contains('\u300C')) return false;
+        AddInsertion(insertions, primaryStart, auxiliaryGap[..leadingSupplementaryCharacterCount]);
+        return true;
     }
 
     private static void AddInsertion(Dictionary<int, StringBuilder> insertions, int primaryStart, ReadOnlySpan<char> text)
