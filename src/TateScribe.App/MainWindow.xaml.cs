@@ -142,8 +142,8 @@ public partial class MainWindow : Window
     private async void RunOcr(object sender, RoutedEventArgs e)
     {
         if (_projectDirectory is null || PageList.SelectedItem is not ProjectPage selected) return;
-        var python = Path.Combine(Directory.GetCurrentDirectory(), "ocr-runtime", "Scripts", "python.exe");
-        var workerScript = Path.Combine(Directory.GetCurrentDirectory(), "ocr-worker", "worker.py");
+        var python = ResolveRuntimePath("ocr-runtime", "Scripts", "python.exe");
+        var workerScript = ResolveRuntimePath("ocr-worker", "worker.py");
         if (!File.Exists(python) || !File.Exists(workerScript))
         {
             MessageBox.Show(this, "ローカルOCRランタイムが見つかりません。scripts/setup-ocr.ps1 を実行してください。", "TateScribe", MessageBoxButton.OK, MessageBoxImage.Warning);
@@ -166,5 +166,11 @@ public partial class MainWindow : Window
         {
             IsEnabled = true;
         }
+    }
+
+    private static string ResolveRuntimePath(params string[] parts)
+    {
+        var packagedPath = Path.Combine([AppContext.BaseDirectory, .. parts]);
+        return File.Exists(packagedPath) ? packagedPath : Path.Combine([Directory.GetCurrentDirectory(), .. parts]);
     }
 }
