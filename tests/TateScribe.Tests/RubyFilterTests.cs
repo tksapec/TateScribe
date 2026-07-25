@@ -49,5 +49,18 @@ public sealed class RubyFilterTests
         Assert.Equal([body], result);
     }
 
+    [Fact]
+    public void ExcludeCandidates_uses_the_adjacent_body_column_when_it_is_narrower_than_the_page_median()
+    {
+        var adjacentBody = Word("大津市", 533, 267, 570, 2195);
+        var ruby = Word("おおつ", 566, 1180, 598, 1390);
+        var widerBodyElsewhere = Word("本文", 800, 267, 840, 2195);
+        var secondWiderBodyElsewhere = Word("本文", 900, 267, 942, 2195);
+
+        var result = RubyFilter.ExcludeCandidates([adjacentBody, ruby, widerBodyElsewhere, secondWiderBodyElsewhere]);
+
+        Assert.Equal([adjacentBody, widerBodyElsewhere, secondWiderBodyElsewhere], result);
+    }
+
     private static OcrWord Word(string text, double left, double top, double right, double bottom) => new(text, .99, left, top, right, bottom);
 }
