@@ -35,4 +35,12 @@ public sealed class PunctuationMergerTests
 
         Assert.Equal("きゃっと", result);
     }
+
+    [Fact]
+    public void Merge_does_not_insert_a_small_kana_across_unmatched_body_text()
+    {
+        var result = PunctuationMerger.Merge("な荷物を持た成瀬", "なった成瀬", 16);
+
+        Assert.Equal("な荷物を持た成瀬", result);
+    }
 }
