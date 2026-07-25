@@ -101,7 +101,11 @@ public partial class MainWindow : Window
         if (_projectDirectory is null || PageList.SelectedItem is not ProjectPage selected) return;
         await using var repository = await SqliteProjectRepository.CreateAsync(_projectDirectory, CancellationToken.None);
         var textState = await repository.LoadPageTextStateAsync(selected.Id, CancellationToken.None);
-        TextEditor.Text = textState.ManualText ?? VerticalTextReconstruction.Reconstruct(textState.MachineWords, 20, 0.75).Text;
+        var reconstruction = VerticalTextReconstruction.Reconstruct(textState.MachineWords, 20, 0.75);
+        TextEditor.Text = textState.ManualText ?? reconstruction.Text;
+        ReviewStatus.Text = reconstruction.ReviewItems.Count == 0
+            ? "要確認の低信頼度文字はありません。"
+            : $"要確認: 低信頼度文字 {reconstruction.ReviewItems.Count} 件";
     }
 
     private async void SaveManualText(object sender, RoutedEventArgs e)
@@ -156,7 +160,11 @@ public partial class MainWindow : Window
             var result = await worker.RecognizeAsync(new OcrRequest(Guid.NewGuid().ToString("N"), "paddle", selected.SourcePath), CancellationToken.None);
             await using var repository = await SqliteProjectRepository.CreateAsync(_projectDirectory, CancellationToken.None);
             await repository.ReplaceOcrWordsAsync(selected.Id, result.Engine, result.ModelVersion, result.Words, CancellationToken.None);
-            TextEditor.Text = VerticalTextReconstruction.Reconstruct(result.Words, 20, 0.75).Text;
+            var reconstruction = VerticalTextReconstruction.Reconstruct(result.Words, 20, 0.75);
+            TextEditor.Text = reconstruction.Text;
+            ReviewStatus.Text = reconstruction.ReviewItems.Count == 0
+                ? "要確認の低信頼度文字はありません。"
+                : $"要確認: 低信頼度文字 {reconstruction.ReviewItems.Count} 件";
         }
         catch (OcrWorkerException exception)
         {
