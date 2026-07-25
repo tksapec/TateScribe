@@ -1,5 +1,6 @@
 using TateScribe.Core.Projects;
 using TateScribe.Core.Ocr;
+using TateScribe.Core.Images;
 using TateScribe.Infrastructure.Storage;
 
 namespace TateScribe.Tests;
@@ -15,7 +16,7 @@ public sealed class ProjectRepositoryTests : IDisposable
         await using var repository = await SqliteProjectRepository.CreateAsync(_directory, CancellationToken.None);
         var pages = new[]
         {
-            new ProjectPage(Guid.NewGuid(), "b.png", "C:\\images\\b.png", "hash-b", 1, true, 90),
+            new ProjectPage(Guid.NewGuid(), "b.png", "C:\\images\\b.png", "hash-b", 1, true, 90, new NormalizedCrop(0, 0.1, 1, 0.9)),
             new ProjectPage(Guid.NewGuid(), "a.png", "C:\\images\\a.png", "hash-a", 0, true, 0)
         };
 
@@ -25,6 +26,7 @@ public sealed class ProjectRepositoryTests : IDisposable
         Assert.Equal(["a.png", "b.png"], loaded.Select(x => x.FileName));
         Assert.Equal("hash-b", loaded[1].SourceHash);
         Assert.Equal(90, loaded[1].RotationDegrees);
+        Assert.Equal(new NormalizedCrop(0, 0.1, 1, 0.9), loaded[1].Crop);
     }
 
     [Fact]

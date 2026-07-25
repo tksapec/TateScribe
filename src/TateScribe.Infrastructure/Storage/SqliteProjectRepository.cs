@@ -1,6 +1,7 @@
 using Microsoft.Data.Sqlite;
 using TateScribe.Core.Ocr;
 using TateScribe.Core.Projects;
+using TateScribe.Core.Images;
 
 namespace TateScribe.Infrastructure.Storage;
 
@@ -33,15 +34,15 @@ public sealed class SqliteProjectRepository : IAsyncDisposable
             var command = _connection.CreateCommand();
             command.Transaction = transaction;
             command.CommandText = """
-                INSERT INTO pages (id, file_name, source_path, source_hash, sort_order, included, rotation_degrees)
-                VALUES ($id, $name, $path, $hash, $order, $included, $rotation)
+                INSERT INTO pages (id, file_name, source_path, source_hash, sort_order, included, rotation_degrees, crop_left, crop_top, crop_right, crop_bottom)
+                VALUES ($id, $name, $path, $hash, $order, $included, $rotation, $left, $top, $right, $bottom)
                 ON CONFLICT(id) DO UPDATE SET
                     file_name = excluded.file_name,
                     source_path = excluded.source_path,
                     source_hash = excluded.source_hash,
                     sort_order = excluded.sort_order,
                     included = excluded.included,
-                    rotation_degrees = excluded.rotation_degrees;
+                    rotation_degrees = excluded.rotation_degrees, crop_left = excluded.crop_left, crop_top = excluded.crop_top, crop_right = excluded.crop_right, crop_bottom = excluded.crop_bottom;
                 """;
             command.Parameters.AddWithValue("$id", page.Id.ToString("D"));
             command.Parameters.AddWithValue("$name", page.FileName);
@@ -50,6 +51,8 @@ public sealed class SqliteProjectRepository : IAsyncDisposable
             command.Parameters.AddWithValue("$order", page.SortOrder);
             command.Parameters.AddWithValue("$included", page.IsIncluded ? 1 : 0);
             command.Parameters.AddWithValue("$rotation", page.RotationDegrees);
+            var crop = page.Crop ?? NormalizedCrop.Full;
+            command.Parameters.AddWithValue("$left", crop.Left); command.Parameters.AddWithValue("$top", crop.Top); command.Parameters.AddWithValue("$right", crop.Right); command.Parameters.AddWithValue("$bottom", crop.Bottom);
             await command.ExecuteNonQueryAsync(cancellationToken);
         }
         await transaction.CommitAsync(cancellationToken);
@@ -58,12 +61,12 @@ public sealed class SqliteProjectRepository : IAsyncDisposable
     public async Task<IReadOnlyList<ProjectPage>> LoadPagesAsync(CancellationToken cancellationToken)
     {
         var command = _connection.CreateCommand();
-        command.CommandText = "SELECT id, file_name, source_path, source_hash, sort_order, included, rotation_degrees FROM pages ORDER BY sort_order;";
+        command.CommandText = "SELECT id, file_name, source_path, source_hash, sort_order, included, rotation_degrees, crop_left, crop_top, crop_right, crop_bottom FROM pages ORDER BY sort_order;";
         var result = new List<ProjectPage>();
         await using var reader = await command.ExecuteReaderAsync(cancellationToken);
         while (await reader.ReadAsync(cancellationToken))
         {
-            result.Add(new ProjectPage(Guid.Parse(reader.GetString(0)), reader.GetString(1), reader.GetString(2), reader.GetString(3), reader.GetInt32(4), reader.GetInt32(5) != 0, reader.GetInt32(6)));
+            result.Add(new ProjectPage(Guid.Parse(reader.GetString(0)), reader.GetString(1), reader.GetString(2), reader.GetString(3), reader.GetInt32(4), reader.GetInt32(5) != 0, reader.GetInt32(6), new NormalizedCrop(reader.GetDouble(7), reader.GetDouble(8), reader.GetDouble(9), reader.GetDouble(10))));
         }
         return result;
     }
@@ -148,7 +151,9 @@ public sealed class SqliteProjectRepository : IAsyncDisposable
                 source_hash TEXT NOT NULL,
                 sort_order INTEGER NOT NULL,
                 included INTEGER NOT NULL,
-                rotation_degrees INTEGER NOT NULL
+                rotation_degrees INTEGER NOT NULL,
+                crop_left REAL NOT NULL DEFAULT 0, crop_top REAL NOT NULL DEFAULT 0,
+                crop_right REAL NOT NULL DEFAULT 1, crop_bottom REAL NOT NULL DEFAULT 1
             );
             CREATE TABLE IF NOT EXISTS ocr_words (
                 page_id TEXT NOT NULL REFERENCES pages(id) ON DELETE CASCADE,
@@ -170,5 +175,10 @@ public sealed class SqliteProjectRepository : IAsyncDisposable
             );
             """;
         await command.ExecuteNonQueryAsync(cancellationToken);
+        foreach (var statement in new[] { "ALTER TABLE pages ADD COLUMN crop_left REAL NOT NULL DEFAULT 0;", "ALTER TABLE pages ADD COLUMN crop_top REAL NOT NULL DEFAULT 0;", "ALTER TABLE pages ADD COLUMN crop_right REAL NOT NULL DEFAULT 1;", "ALTER TABLE pages ADD COLUMN crop_bottom REAL NOT NULL DEFAULT 1;" })
+        {
+            try { var migration = _connection.CreateCommand(); migration.CommandText = statement; await migration.ExecuteNonQueryAsync(cancellationToken); }
+            catch (SqliteException) { }
+        }
     }
 }

@@ -224,7 +224,7 @@ public partial class MainWindow : Window
                 var page = pages[index];
                 ReviewStatus.Text = $"OCR実行中: {index + 1}/{pages.Count} {page.FileName}";
                 if (!File.Exists(page.SourcePath)) throw new FileNotFoundException("OCR対象の元画像が見つかりません。", page.SourcePath);
-                var prepared = await preprocessor.PrepareAsync(page.SourcePath, cacheDirectory, NormalizedCrop.Full, page.RotationDegrees, _ocrCancellation.Token);
+                var prepared = await preprocessor.PrepareAsync(page.SourcePath, cacheDirectory, page.Crop ?? NormalizedCrop.Full, page.RotationDegrees, _ocrCancellation.Token);
                 var result = await worker.RecognizeAsync(new OcrRequest(Guid.NewGuid().ToString("N"), "paddle", prepared.CachePath), _ocrCancellation.Token);
                 await repository.ReplaceOcrWordsAsync(page.Id, result.Engine, result.ModelVersion, result.Words, _ocrCancellation.Token);
                 if (PageList.SelectedItem is ProjectPage selected && selected.Id == page.Id)
