@@ -241,20 +241,28 @@ public partial class MainWindow : Window
             await using var repository = await SqliteProjectRepository.CreateAsync(projectDirectory, CancellationToken.None);
             var preprocessor = new ScreenshotPreprocessor();
             var cacheDirectory = Path.Combine(projectDirectory, ".tatescribe-cache");
+            var failedPages = new List<string>();
             for (var index = 0; index < pages.Count; index++)
             {
                 var page = pages[index];
                 ReviewStatus.Text = $"OCR実行中: {index + 1}/{pages.Count} {page.FileName}";
-                if (!File.Exists(page.SourcePath)) throw new FileNotFoundException("OCR対象の元画像が見つかりません。", page.SourcePath);
-                var prepared = await preprocessor.PrepareAsync(page.SourcePath, cacheDirectory, page.Crop ?? NormalizedCrop.Full, page.RotationDegrees, _ocrCancellation.Token);
-                var result = await worker.RecognizeAsync(new OcrRequest(Guid.NewGuid().ToString("N"), "paddle", prepared.CachePath), _ocrCancellation.Token);
-                await repository.ReplaceOcrWordsAsync(page.Id, result.Engine, result.ModelVersion, result.Words, _ocrCancellation.Token);
-                if (PageList.SelectedItem is ProjectPage selected && selected.Id == page.Id)
+                try
                 {
-                    TextEditor.Text = VerticalTextReconstruction.Reconstruct(result.Words, 20, 0.75).Text;
+                    if (!File.Exists(page.SourcePath)) throw new FileNotFoundException("OCR対象の元画像が見つかりません。", page.SourcePath);
+                    var prepared = await preprocessor.PrepareAsync(page.SourcePath, cacheDirectory, page.Crop ?? NormalizedCrop.Full, page.RotationDegrees, _ocrCancellation.Token);
+                    var result = await worker.RecognizeAsync(new OcrRequest(Guid.NewGuid().ToString("N"), "paddle", prepared.CachePath), _ocrCancellation.Token);
+                    await repository.ReplaceOcrWordsAsync(page.Id, result.Engine, result.ModelVersion, result.Words, _ocrCancellation.Token);
+                    if (PageList.SelectedItem is ProjectPage selected && selected.Id == page.Id)
+                    {
+                        TextEditor.Text = VerticalTextReconstruction.Reconstruct(result.Words, 20, 0.75).Text;
+                    }
                 }
+                catch (OperationCanceledException) { throw; }
+                catch (Exception) { failedPages.Add(page.FileName); }
             }
-            ReviewStatus.Text = $"OCR完了: {pages.Count} ページ";
+            ReviewStatus.Text = failedPages.Count == 0
+                ? $"OCR完了: {pages.Count} ページ"
+                : $"OCR完了: {pages.Count - failedPages.Count}/{pages.Count} ページ（失敗: {string.Join(", ", failedPages)}）";
         }
         catch (OcrWorkerException exception)
         {
