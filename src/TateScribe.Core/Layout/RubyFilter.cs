@@ -12,7 +12,7 @@ public static class RubyFilter
     }
 
     private static bool IsRubyCandidate(OcrWord candidate, IReadOnlyList<OcrWord> words, double medianWidth) =>
-        Width(candidate) < medianWidth * .7 &&
+        Width(candidate) < medianWidth * .85 &&
         words.Any(body => body != candidate && Width(body) >= medianWidth &&
             candidate.Bottom > body.Top && candidate.Top < body.Bottom &&
             HorizontalGap(candidate, body) <= medianWidth);

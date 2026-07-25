@@ -38,5 +38,16 @@ public sealed class RubyFilterTests
         Assert.Equal([shorterBodyColumn, longerBodyColumn], result);
     }
 
+    [Fact]
+    public void ExcludeCandidates_removes_a_ruby_column_that_is_slightly_narrower_than_body_text()
+    {
+        var body = Word("大津市", 533, 267, 573, 2195);
+        var ruby = Word("おおつ", 566, 1180, 598, 1390);
+
+        var result = RubyFilter.ExcludeCandidates([body, ruby]);
+
+        Assert.Equal([body], result);
+    }
+
     private static OcrWord Word(string text, double left, double top, double right, double bottom) => new(text, .99, left, top, right, bottom);
 }
