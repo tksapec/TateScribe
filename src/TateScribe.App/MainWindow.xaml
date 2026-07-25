@@ -17,6 +17,7 @@
         <Button Padding="12,6" Margin="0,0,8,0" Click="MovePageUp">上へ</Button>
         <Button Padding="12,6" Click="MovePageDown">下へ</Button>
       </StackPanel>
+      <Button DockPanel.Dock="Bottom" Margin="0,0,0,8" Padding="12,6" Click="TogglePageUsage">使用／除外</Button>
       <ListBox x:Name="PageList" DisplayMemberPath="FileName" SelectionChanged="PageSelectionChanged" />
     </DockPanel>
     <Border Grid.Column="2" BorderBrush="Gray" BorderThickness="1" CornerRadius="4" Padding="24">

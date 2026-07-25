@@ -84,6 +84,16 @@ public partial class MainWindow : Window
 
     private async void MovePageDown(object sender, RoutedEventArgs e) => await MoveSelectedPageAsync(1);
 
+    private async void TogglePageUsage(object sender, RoutedEventArgs e)
+    {
+        if (_projectDirectory is null || PageList.SelectedItem is not ProjectPage selected) return;
+        _pages = _pages.Select(page => page.Id == selected.Id ? PageUsageEditor.Toggle(page) : page).ToList();
+        await using var repository = await SqliteProjectRepository.CreateAsync(_projectDirectory, CancellationToken.None);
+        await repository.SavePagesAsync(_pages, CancellationToken.None);
+        RefreshPages();
+        PageList.SelectedItem = _pages.Single(page => page.Id == selected.Id);
+    }
+
     private async Task MoveSelectedPageAsync(int offset)
     {
         if (_projectDirectory is null || PageList.SelectedItem is not ProjectPage selected) return;
