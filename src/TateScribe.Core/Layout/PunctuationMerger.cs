@@ -46,7 +46,7 @@ public static class PunctuationMerger
             return;
         }
 
-        if (ContainsOnlyWhitespace(primaryGap) && auxiliaryGap.Length == 1 && auxiliaryGap[0] == '\u4E00' && HasClosingQuoteAhead(primary, primaryEnd) && HasClosingQuoteAhead(auxiliary, auxiliaryEnd))
+        if (ContainsOnlyWhitespace(primaryGap) && auxiliaryGap.Length == 1 && auxiliaryGap[0] == '\u4E00' && HasClosingQuoteAhead(auxiliary, auxiliaryEnd))
         {
             AddInsertion(insertions, primaryStart, "\u300C".AsSpan());
             return;

@@ -91,4 +91,20 @@ public sealed class PunctuationMergerTests
 
         Assert.Equal("成瀬は「島崎、わたしはシャボン玉を極めようと思うんだ」と言った", result);
     }
+
+    [Fact]
+    public void Merge_recovers_a_quote_marker_after_a_nearby_missing_comma()
+    {
+        var result = PunctuationMerger.Merge("ところ成瀬は島崎、わたしはシャボン玉を極めようと思うんだ」と", "ところ、成瀬は一島崎、わたしはシャボン玉を極めようと思うんだ」と", 16);
+
+        Assert.Equal("ところ、成瀬は「島崎、わたしはシャボン玉を極めようと思うんだ」と", result);
+    }
+
+    [Fact]
+    public void Merge_recovers_both_quotes_when_the_primary_ocr_missed_them()
+    {
+        var result = PunctuationMerger.Merge("成瀬は島崎、わたしはシャボン玉を極めようと思うんだと言った", "成瀬は一島崎、わたしはシャボン玉を極めようと思うんだ」と言った", 16);
+
+        Assert.Equal("成瀬は「島崎、わたしはシャボン玉を極めようと思うんだ」と言った", result);
+    }
 }
