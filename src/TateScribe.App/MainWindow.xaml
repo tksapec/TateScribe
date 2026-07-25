@@ -19,6 +19,10 @@
         <Button Padding="12,6" Margin="0,0,8,0" Click="MovePageUp">上へ</Button>
         <Button Padding="12,6" Click="MovePageDown">下へ</Button>
       </StackPanel>
+      <StackPanel DockPanel.Dock="Bottom" Orientation="Horizontal" HorizontalAlignment="Center" Margin="0,0,0,8">
+        <Button Padding="12,6" Margin="0,0,8,0" Click="RotatePageLeft">左へ90度</Button>
+        <Button Padding="12,6" Click="RotatePageRight">右へ90度</Button>
+      </StackPanel>
       <Button DockPanel.Dock="Bottom" Margin="0,0,0,8" Padding="12,6" Click="TogglePageUsage">使用／除外</Button>
       <ListBox x:Name="PageList" DisplayMemberPath="FileName" SelectionChanged="PageSelectionChanged" />
     </DockPanel>

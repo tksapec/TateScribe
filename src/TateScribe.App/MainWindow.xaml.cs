@@ -89,6 +89,10 @@ public partial class MainWindow : Window
 
     private async void MovePageDown(object sender, RoutedEventArgs e) => await MoveSelectedPageAsync(1);
 
+    private async void RotatePageLeft(object sender, RoutedEventArgs e) => await RotateSelectedPageAsync(-90);
+
+    private async void RotatePageRight(object sender, RoutedEventArgs e) => await RotateSelectedPageAsync(90);
+
     private async void TogglePageUsage(object sender, RoutedEventArgs e)
     {
         if (_projectDirectory is null || PageList.SelectedItem is not ProjectPage selected) return;
@@ -109,6 +113,16 @@ public partial class MainWindow : Window
         PageList.SelectedItem = _pages.Single(page => page.Id == selected.Id);
     }
 
+    private async Task RotateSelectedPageAsync(int degrees)
+    {
+        if (_projectDirectory is null || PageList.SelectedItem is not ProjectPage selected) return;
+        _pages = _pages.Select(page => page.Id == selected.Id ? PageRotationEditor.Rotate(page, degrees) : page).ToList();
+        await using var repository = await SqliteProjectRepository.CreateAsync(_projectDirectory, CancellationToken.None);
+        await repository.SavePagesAsync(_pages, CancellationToken.None);
+        RefreshPages();
+        PageList.SelectedItem = _pages.Single(page => page.Id == selected.Id);
+    }
+
     private void RefreshPages() => PageList.ItemsSource = _pages.OrderBy(page => page.SortOrder).ToArray();
 
     private async void PageSelectionChanged(object sender, System.Windows.Controls.SelectionChangedEventArgs e)
@@ -118,7 +132,10 @@ public partial class MainWindow : Window
         var textState = await repository.LoadPageTextStateAsync(selected.Id, CancellationToken.None);
         var reconstruction = VerticalTextReconstruction.Reconstruct(textState.MachineWords, 20, 0.75);
         TextEditor.Text = textState.ManualText ?? reconstruction.Text;
-        PagePreview.Source = new BitmapImage(new Uri(selected.SourcePath, UriKind.Absolute));
+        var source = new BitmapImage(new Uri(selected.SourcePath, UriKind.Absolute));
+        PagePreview.Source = selected.RotationDegrees == 0
+            ? source
+            : new TransformedBitmap(source, new System.Windows.Media.RotateTransform(selected.RotationDegrees));
         ReviewStatus.Text = reconstruction.ReviewItems.Count == 0
             ? "要確認の低信頼度文字はありません。"
             : $"要確認: 低信頼度文字 {reconstruction.ReviewItems.Count} 件";
