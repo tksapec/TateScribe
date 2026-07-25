@@ -11,6 +11,11 @@ class WorkerProtocolTests(unittest.TestCase):
         self.assertIn("text_det_thresh=0.15", worker)
         self.assertIn("text_det_box_thresh=0.3", worker)
 
+    def test_tesseract_vertical_adapter_is_available(self):
+        worker = (Path(__file__).parents[1] / "worker.py").read_text(encoding="utf-8")
+        self.assertIn('request.get("engine") == "tesseract"', worker)
+        self.assertIn("jpn_vert", worker)
+
     def test_mock_request_returns_versioned_result(self):
         worker = Path(__file__).parents[1] / "worker.py"
         request = {"protocolVersion": 1, "requestId": "test", "engine": "mock", "imagePath": "sample.png"}

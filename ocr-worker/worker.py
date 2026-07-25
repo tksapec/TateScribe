@@ -1,6 +1,7 @@
 """Offline JSON Lines OCR worker. Models are loaded only from local paths."""
 import json
 import os
+import subprocess
 import sys
 from pathlib import Path
 
@@ -17,6 +18,11 @@ def response_for(request: dict) -> dict:
         try:
             return paddle_response(request)
         except Exception as error:  # worker boundary: return a structured, retryable error
+            return {"protocolVersion": PROTOCOL_VERSION, "requestId": request_id, "status": "error", "error": str(error)}
+    if request.get("engine") == "tesseract":
+        try:
+            return tesseract_response(request)
+        except Exception as error:
             return {"protocolVersion": PROTOCOL_VERSION, "requestId": request_id, "status": "error", "error": str(error)}
     return {"protocolVersion": PROTOCOL_VERSION, "requestId": request_id, "status": "error", "error": "OCR engine is not configured with a local model"}
 
@@ -63,6 +69,33 @@ def paddle_response(request: dict) -> dict:
         "engine": "paddle",
         "modelVersion": "PP-OCRv6-medium",
         "words": words,
+    }
+
+
+def tesseract_response(request: dict) -> dict:
+    image_path = Path(request["imagePath"])
+    if not image_path.is_file():
+        raise ValueError("OCR input image does not exist")
+    root = Path(__file__).resolve().parents[1]
+    runtime = root / "ocr-runtime"
+    executable = Path(os.environ.get("TATESCRIBE_TESSERACT_PATH", runtime / "tesseract" / "tesseract.exe"))
+    if not executable.is_file():
+        executable = Path(r"C:\Program Files\Tesseract-OCR\tesseract.exe")
+    tessdata = Path(os.environ.get("TESSDATA_PREFIX", runtime / "tessdata"))
+    if not executable.is_file() or not (tessdata / "jpn_vert.traineddata").is_file():
+        raise ValueError("Tesseract jpn_vert runtime is missing. Run setup before OCR.")
+    completed = subprocess.run(
+        [str(executable), str(image_path), "stdout", "--tessdata-dir", str(tessdata), "-l", "jpn_vert", "--psm", "5"],
+        capture_output=True, text=True, encoding="utf-8", errors="replace", check=True,
+    )
+    text = "".join(completed.stdout.split())
+    return {
+        "protocolVersion": PROTOCOL_VERSION,
+        "requestId": request["requestId"],
+        "status": "ok",
+        "engine": "tesseract",
+        "modelVersion": "jpn_vert",
+        "words": [{"text": text, "confidence": 0.8, "left": 0, "top": 0, "right": 1, "bottom": 1}],
     }
 
 

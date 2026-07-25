@@ -8,6 +8,6 @@
 | Open XML SDK | 3.3.0 | MIT | DOCX generation |
 | PaddlePaddle | 3.2.0 | Apache-2.0 | local OCR runtime |
 | PaddleOCR | 3.7.0 | Apache-2.0 | primary OCR adapter |
-| Tesseract | separately bundled | Apache-2.0 | optional vertical Japanese OCR adapter |
+| Tesseract OCR | 5.5.0 | Apache-2.0 | Japanese vertical OCR adapter with `jpn_vert` model |
 
 Production packaging must include model files, their upstream license notices, and SHA-256 checksums in the release manifest. The worker never downloads models or sends user data to a network service.

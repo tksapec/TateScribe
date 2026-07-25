@@ -298,7 +298,7 @@ public partial class MainWindow : Window
                 {
                     if (!File.Exists(page.SourcePath)) throw new FileNotFoundException("OCR対象の元画像が見つかりません。", page.SourcePath);
                     var prepared = await preprocessor.PrepareAsync(page.SourcePath, cacheDirectory, page.Crop ?? NormalizedCrop.Full, page.RotationDegrees, _ocrCancellation.Token);
-                    var result = await worker.RecognizeAsync(new OcrRequest(Guid.NewGuid().ToString("N"), "paddle", prepared.CachePath), _ocrCancellation.Token);
+                    var result = await worker.RecognizeAsync(new OcrRequest(Guid.NewGuid().ToString("N"), "tesseract", prepared.CachePath), _ocrCancellation.Token);
                     await repository.ReplaceOcrWordsAsync(page.Id, result.Engine, result.ModelVersion, result.Words, _ocrCancellation.Token);
                     if (PageList.SelectedItem is ProjectPage selected && selected.Id == page.Id)
                     {

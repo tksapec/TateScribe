@@ -10,4 +10,14 @@ if (-not (Test-Path $runtimePython)) {
 $env:PADDLE_PDX_CACHE_HOME = Join-Path $runtime 'cache'
 $env:PADDLE_PDX_DISABLE_MODEL_SOURCE_CHECK = 'True'
 & $runtimePython -c "from paddleocr import PaddleOCR; PaddleOCR(lang='japan', use_doc_orientation_classify=False, use_doc_unwarping=False, use_textline_orientation=False)"
-Write-Host 'PaddleOCR models were downloaded during setup into ocr-runtime\cache. OCR runtime never downloads models.'
+$tesseract = Join-Path $runtime 'tesseract\tesseract.exe'
+if (-not (Test-Path $tesseract)) {
+  winget install --id tesseract-ocr.tesseract --exact --silent --accept-package-agreements --accept-source-agreements
+  New-Item -ItemType Directory -Path (Join-Path $runtime 'tesseract') -Force | Out-Null
+  Copy-Item 'C:\Program Files\Tesseract-OCR\*' (Join-Path $runtime 'tesseract') -Recurse -Force
+}
+$tessdata = Join-Path $runtime 'tessdata'
+New-Item -ItemType Directory -Path $tessdata -Force | Out-Null
+$jpnVert = Join-Path $tessdata 'jpn_vert.traineddata'
+if (-not (Test-Path $jpnVert)) { Invoke-WebRequest -Uri 'https://github.com/tesseract-ocr/tessdata_best/raw/main/jpn_vert.traineddata' -OutFile $jpnVert }
+Write-Host 'PaddleOCR and Tesseract jpn_vert models were installed into ocr-runtime. OCR runtime never downloads models.'

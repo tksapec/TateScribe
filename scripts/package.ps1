@@ -5,6 +5,8 @@ if (Test-Path -LiteralPath $output) { Remove-Item -LiteralPath $output -Recurse 
 dotnet publish "$PSScriptRoot\..\src\TateScribe.App\TateScribe.App.csproj" -c Release -r win-x64 --self-contained true -o $output
 $runtime = Join-Path $PSScriptRoot '..\ocr-runtime'
 if (-not (Test-Path (Join-Path $runtime 'Scripts\python.exe'))) { throw 'OCR runtime is missing. Run scripts/setup-ocr.ps1 before packaging.' }
+if (-not (Test-Path (Join-Path $runtime 'tesseract\tesseract.exe'))) { throw 'Tesseract runtime is missing. Run scripts/setup-ocr.ps1 before packaging.' }
+if (-not (Test-Path (Join-Path $runtime 'tessdata\jpn_vert.traineddata'))) { throw 'Tesseract jpn_vert model is missing. Run scripts/setup-ocr.ps1 before packaging.' }
 $packagedRuntime = Join-Path $output 'ocr-runtime'
 $packagedWorker = Join-Path $output 'ocr-worker'
 New-Item -ItemType Directory -Path $packagedRuntime, $packagedWorker | Out-Null
