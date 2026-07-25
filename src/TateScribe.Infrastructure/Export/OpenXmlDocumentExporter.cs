@@ -28,6 +28,9 @@ public sealed class OpenXmlDocumentExporter : IDocumentExporter
             }
             mainPart.Document.Body!.Append(paragraph);
         }
+        mainPart.Document.Body!.Append(new SectionProperties(
+            new PageSize { Width = 11906U, Height = 16838U },
+            new PageMargin { Top = 1134, Right = 1134U, Bottom = 1134, Left = 1134U, Header = 708U, Footer = 708U, Gutter = 0U }));
         mainPart.Document.Save();
         return Task.CompletedTask;
     }

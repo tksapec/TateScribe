@@ -1,4 +1,5 @@
 using DocumentFormat.OpenXml.Packaging;
+using DocumentFormat.OpenXml.Wordprocessing;
 using TateScribe.Core.Export;
 using TateScribe.Infrastructure.Export;
 
@@ -25,6 +26,20 @@ public sealed class DocxExportTests : IDisposable
         Assert.Contains("ruby", xml, StringComparison.OrdinalIgnoreCase);
         Assert.DoesNotContain("ScreenshotBoundary", xml, StringComparison.Ordinal);
         Assert.DoesNotContain("w:type=\"page\"", xml, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task Export_writes_section_properties_for_standard_docx_renderers()
+    {
+        var exporter = new OpenXmlDocumentExporter();
+
+        await exporter.ExportAsync(new ExportDocument([new ExportParagraph(ExportStyle.Normal, "本文")]), _path, CancellationToken.None);
+
+        using var word = WordprocessingDocument.Open(_path, false);
+        var section = word.MainDocumentPart!.Document.Body!.GetFirstChild<SectionProperties>();
+        Assert.NotNull(section);
+        Assert.NotNull(section.GetFirstChild<PageSize>());
+        Assert.NotNull(section.GetFirstChild<PageMargin>());
     }
 
     public void Dispose()
