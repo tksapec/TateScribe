@@ -46,6 +46,12 @@ public static class PunctuationMerger
             return;
         }
 
+        if (ContainsOnlyWhitespace(primaryGap) && auxiliaryGap.Length == 1 && auxiliaryGap[0] == '\u4E00' && HasClosingQuoteAhead(primary, primaryEnd) && HasClosingQuoteAhead(auxiliary, auxiliaryEnd))
+        {
+            AddInsertion(insertions, primaryStart, "\u300C".AsSpan());
+            return;
+        }
+
         var leadingSupplementaryCharacterCount = LeadingSupplementaryCharacterCount(auxiliaryGap);
         if (primaryGap.Length == auxiliaryGap.Length - leadingSupplementaryCharacterCount && leadingSupplementaryCharacterCount > 0 && ContainsOnlyOpeningQuoteMarkers(auxiliaryGap[..leadingSupplementaryCharacterCount]))
             AddInsertion(insertions, primaryStart, auxiliaryGap[..leadingSupplementaryCharacterCount]);
@@ -70,6 +76,12 @@ public static class PunctuationMerger
         foreach (var character in text)
             if (character is not ('\u300C' or '\u300E' or '\uFF08')) return false;
         return true;
+    }
+
+    private static bool HasClosingQuoteAhead(string text, int startIndex)
+    {
+        var closingQuoteIndex = text.IndexOf('\u300D', startIndex);
+        return closingQuoteIndex >= startIndex && closingQuoteIndex - startIndex <= 80;
     }
 
     private static bool HasReliableContext(string primary, string auxiliary, IReadOnlyList<(int PrimaryIndex, int AuxiliaryIndex)> matches, int leftMatchIndex, int rightMatchIndex)

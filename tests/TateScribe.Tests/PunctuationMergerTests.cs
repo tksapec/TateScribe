@@ -83,4 +83,12 @@ public sealed class PunctuationMergerTests
 
         Assert.Equal("成瀬は夕方のローカル番組「ぐるりんワイド」に出演する", result);
     }
+
+    [Fact]
+    public void Merge_treats_a_tesseract_horizontal_stroke_as_an_opening_quote_when_a_closing_quote_follows()
+    {
+        var result = PunctuationMerger.Merge("成瀬は島崎、わたしはシャボン玉を極めようと思うんだ」と言った", "成瀬は一島崎、わたしはシャボン玉を極めようと思うんだ」と言った", 16);
+
+        Assert.Equal("成瀬は「島崎、わたしはシャボン玉を極めようと思うんだ」と言った", result);
+    }
 }
