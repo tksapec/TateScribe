@@ -68,11 +68,13 @@ public sealed class ProjectRepositoryTests : IDisposable
             await command.ExecuteNonQueryAsync();
         }
 
-        await using var repository = await SqliteProjectRepository.CreateAsync(_directory, CancellationToken.None);
-        var page = new ProjectPage(Guid.NewGuid(), "page.png", "C:\\page.png", "hash", 0, true, 0, new NormalizedCrop(0, .1, 1, .9));
-        await repository.SavePagesAsync([page], CancellationToken.None);
+        await using (var repository = await SqliteProjectRepository.CreateAsync(_directory, CancellationToken.None))
+        {
+            var page = new ProjectPage(Guid.NewGuid(), "page.png", "C:\\page.png", "hash", 0, true, 0, new NormalizedCrop(0, .1, 1, .9));
+            await repository.SavePagesAsync([page], CancellationToken.None);
 
-        Assert.Equal(page.Crop, Assert.Single(await repository.LoadPagesAsync(CancellationToken.None)).Crop);
+            Assert.Equal(page.Crop, Assert.Single(await repository.LoadPagesAsync(CancellationToken.None)).Crop);
+        }
     }
 
     public void Dispose()
