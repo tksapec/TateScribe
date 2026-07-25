@@ -28,5 +28,15 @@ public sealed class VerticalTextReconstructionTests
         Assert.Single(first.ReviewItems);
     }
 
+    [Fact]
+    public void Reconstruct_inserts_a_paragraph_break_when_the_next_column_has_a_first_line_indent()
+    {
+        var result = VerticalTextReconstruction.Reconstruct([
+            Word("一", 100, 10, 0.98), Word("二", 90, 28, 0.98), Word("三", 80, 10, 0.98)
+        ], columnTolerance: 8, lowConfidenceThreshold: 0.75);
+
+        Assert.Equal("一\n二三", result.Text);
+    }
+
     private static OcrWord Word(string text, double x, double y, double confidence) => new(text, confidence, x, y, x + 8, y + 12);
 }

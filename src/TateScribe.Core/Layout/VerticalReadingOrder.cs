@@ -5,6 +5,9 @@ public sealed record Glyph(string Text, double X, double Y);
 public static class VerticalReadingOrder
 {
     public static IReadOnlyList<Glyph> Order(IEnumerable<Glyph> glyphs, double columnTolerance)
+        => OrderColumns(glyphs, columnTolerance).SelectMany(column => column).ToArray();
+
+    public static IReadOnlyList<IReadOnlyList<Glyph>> OrderColumns(IEnumerable<Glyph> glyphs, double columnTolerance)
     {
         ArgumentOutOfRangeException.ThrowIfNegativeOrZero(columnTolerance);
         var columns = new List<List<Glyph>>();
@@ -20,7 +23,7 @@ public static class VerticalReadingOrder
         }
 
         return columns.OrderByDescending(x => x.Average(g => g.X))
-            .SelectMany(x => x.OrderBy(g => g.Y))
+            .Select(x => (IReadOnlyList<Glyph>)x.OrderBy(g => g.Y).ToArray())
             .ToArray();
     }
 }
