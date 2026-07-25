@@ -41,7 +41,7 @@ public static class PunctuationMerger
             }
             if (index < primary.Length) result.Append(primary[index]);
         }
-        return RecoverQuotedKatakanaTitleAfterNiyoru(result.ToString());
+        return NormalizeSafeDuplicateQuotes(RecoverQuotedKatakanaTitleAfterNiyoru(result.ToString()));
     }
 
     private static void AddSupplementaryGap(string primary, string auxiliary, int primaryStart, int primaryEnd, int auxiliaryStart, int auxiliaryEnd, Dictionary<int, StringBuilder> insertions, Dictionary<int, string> replacements, bool hasReliableContext)
@@ -171,6 +171,31 @@ public static class PunctuationMerger
         repaired.Append(text, closingQuoteRun + 3, text.Length - closingQuoteRun - 3);
         return repaired.ToString();
     }
+
+    private static string NormalizeSafeDuplicateQuotes(string text)
+    {
+        text = text.Replace("\u300C\u300C", "\u300C");
+        var normalized = new StringBuilder(text.Length);
+        for (var index = 0; index < text.Length; index++)
+        {
+            if (text[index] == '\u300D'
+                && index + 2 < text.Length
+                && text[index + 1] == '\u300D'
+                && IsBodyTextCharacter(text[index + 2]))
+            {
+                normalized.Append('\u300D');
+                index++;
+                continue;
+            }
+            normalized.Append(text[index]);
+        }
+        return normalized.ToString();
+    }
+
+    private static bool IsBodyTextCharacter(char character) =>
+        character is >= '\u3041' and <= '\u3096'
+        || IsKatakana(character)
+        || IsCjkIdeograph(character);
 
     private static bool HasClosingQuoteAhead(string text, int startIndex)
     {

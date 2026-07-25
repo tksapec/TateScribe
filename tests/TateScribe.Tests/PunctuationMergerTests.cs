@@ -155,4 +155,20 @@ public sealed class PunctuationMergerTests
 
         Assert.Equal("幸運の女神による「サマージャンボ宝くじを買いましょう」のPR", result);
     }
+
+    [Fact]
+    public void Merge_removes_an_immediately_duplicated_opening_quote()
+    {
+        var result = PunctuationMerger.Merge("将来の夢は「「二百歳まで生きる」だった", "将来の夢は「「二百歳まで生きる」だった", 16);
+
+        Assert.Equal("将来の夢は「二百歳まで生きる」だった", result);
+    }
+
+    [Fact]
+    public void Merge_removes_an_immediately_duplicated_closing_quote_before_body_text()
+    {
+        var result = PunctuationMerger.Merge("「歯を大切にしましょう」」の啓発", "「歯を大切にしましょう」」の啓発", 16);
+
+        Assert.Equal("「歯を大切にしましょう」の啓発", result);
+    }
 }
