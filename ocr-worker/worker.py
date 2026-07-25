@@ -40,7 +40,11 @@ def paddle_response(request: dict) -> dict:
         use_doc_unwarping=False,
         use_textline_orientation=False,
     )
-    result = next(iter(engine.predict(str(image_path))))
+    result = next(iter(engine.predict(
+        str(image_path),
+        text_det_thresh=0.15,
+        text_det_box_thresh=0.3,
+    )))
     data = result.json["res"]
     words = []
     for box, text, confidence in zip(data["rec_boxes"], data["rec_texts"], data["rec_scores"]):
