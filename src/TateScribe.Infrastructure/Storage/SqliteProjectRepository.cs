@@ -1,4 +1,5 @@
 using Microsoft.Data.Sqlite;
+using TateScribe.Core.Ocr;
 using TateScribe.Core.Projects;
 
 namespace TateScribe.Infrastructure.Storage;
@@ -61,6 +62,69 @@ public sealed class SqliteProjectRepository : IAsyncDisposable
         return result;
     }
 
+    public async Task ReplaceOcrWordsAsync(Guid pageId, string engine, string modelVersion, IReadOnlyList<OcrWord> words, CancellationToken cancellationToken)
+    {
+        await using var transaction = _connection.BeginTransaction();
+        var clear = _connection.CreateCommand();
+        clear.Transaction = transaction;
+        clear.CommandText = "DELETE FROM ocr_words WHERE page_id = $pageId;";
+        clear.Parameters.AddWithValue("$pageId", pageId.ToString("D"));
+        await clear.ExecuteNonQueryAsync(cancellationToken);
+        for (var index = 0; index < words.Count; index++)
+        {
+            var word = words[index];
+            var insert = _connection.CreateCommand();
+            insert.Transaction = transaction;
+            insert.CommandText = "INSERT INTO ocr_words (page_id, ordinal, engine, model_version, text, confidence, left_x, top_y, right_x, bottom_y) VALUES ($pageId, $ordinal, $engine, $model, $text, $confidence, $left, $top, $right, $bottom);";
+            insert.Parameters.AddWithValue("$pageId", pageId.ToString("D"));
+            insert.Parameters.AddWithValue("$ordinal", index);
+            insert.Parameters.AddWithValue("$engine", engine);
+            insert.Parameters.AddWithValue("$model", modelVersion);
+            insert.Parameters.AddWithValue("$text", word.Text);
+            insert.Parameters.AddWithValue("$confidence", word.Confidence);
+            insert.Parameters.AddWithValue("$left", word.Left);
+            insert.Parameters.AddWithValue("$top", word.Top);
+            insert.Parameters.AddWithValue("$right", word.Right);
+            insert.Parameters.AddWithValue("$bottom", word.Bottom);
+            await insert.ExecuteNonQueryAsync(cancellationToken);
+        }
+        await transaction.CommitAsync(cancellationToken);
+    }
+
+    public async Task SaveManualTextAsync(Guid pageId, string text, CancellationToken cancellationToken)
+    {
+        var command = _connection.CreateCommand();
+        command.CommandText = "INSERT INTO manual_page_text (page_id, text, updated_utc) VALUES ($pageId, $text, $utc) ON CONFLICT(page_id) DO UPDATE SET text = excluded.text, updated_utc = excluded.updated_utc;";
+        command.Parameters.AddWithValue("$pageId", pageId.ToString("D"));
+        command.Parameters.AddWithValue("$text", text);
+        command.Parameters.AddWithValue("$utc", DateTimeOffset.UtcNow.ToString("O"));
+        await command.ExecuteNonQueryAsync(cancellationToken);
+    }
+
+    public async Task<PageTextState> LoadPageTextStateAsync(Guid pageId, CancellationToken cancellationToken)
+    {
+        var command = _connection.CreateCommand();
+        command.CommandText = "SELECT engine, model_version, text, confidence, left_x, top_y, right_x, bottom_y FROM ocr_words WHERE page_id = $pageId ORDER BY ordinal;";
+        command.Parameters.AddWithValue("$pageId", pageId.ToString("D"));
+        var words = new List<OcrWord>();
+        var engine = "none";
+        var model = "none";
+        await using (var reader = await command.ExecuteReaderAsync(cancellationToken))
+        {
+            while (await reader.ReadAsync(cancellationToken))
+            {
+                engine = reader.GetString(0);
+                model = reader.GetString(1);
+                words.Add(new OcrWord(reader.GetString(2), reader.GetDouble(3), reader.GetDouble(4), reader.GetDouble(5), reader.GetDouble(6), reader.GetDouble(7)));
+            }
+        }
+        var manual = _connection.CreateCommand();
+        manual.CommandText = "SELECT text FROM manual_page_text WHERE page_id = $pageId;";
+        manual.Parameters.AddWithValue("$pageId", pageId.ToString("D"));
+        var manualText = await manual.ExecuteScalarAsync(cancellationToken) as string;
+        return new PageTextState(pageId, manualText, engine, model, words);
+    }
+
     public async ValueTask DisposeAsync()
     {
         await _connection.CloseAsync();
@@ -79,6 +143,24 @@ public sealed class SqliteProjectRepository : IAsyncDisposable
                 sort_order INTEGER NOT NULL,
                 included INTEGER NOT NULL,
                 rotation_degrees INTEGER NOT NULL
+            );
+            CREATE TABLE IF NOT EXISTS ocr_words (
+                page_id TEXT NOT NULL REFERENCES pages(id) ON DELETE CASCADE,
+                ordinal INTEGER NOT NULL,
+                engine TEXT NOT NULL,
+                model_version TEXT NOT NULL,
+                text TEXT NOT NULL,
+                confidence REAL NOT NULL,
+                left_x REAL NOT NULL,
+                top_y REAL NOT NULL,
+                right_x REAL NOT NULL,
+                bottom_y REAL NOT NULL,
+                PRIMARY KEY (page_id, ordinal)
+            );
+            CREATE TABLE IF NOT EXISTS manual_page_text (
+                page_id TEXT PRIMARY KEY NOT NULL REFERENCES pages(id) ON DELETE CASCADE,
+                text TEXT NOT NULL,
+                updated_utc TEXT NOT NULL
             );
             """;
         await command.ExecuteNonQueryAsync(cancellationToken);
