@@ -28,15 +28,21 @@ public sealed class SqliteProjectRepository : IAsyncDisposable
     public async Task SavePagesAsync(IReadOnlyList<ProjectPage> pages, CancellationToken cancellationToken)
     {
         await using var transaction = _connection.BeginTransaction();
-        var clear = _connection.CreateCommand();
-        clear.Transaction = transaction;
-        clear.CommandText = "DELETE FROM pages;";
-        await clear.ExecuteNonQueryAsync(cancellationToken);
         foreach (var page in pages)
         {
             var command = _connection.CreateCommand();
             command.Transaction = transaction;
-            command.CommandText = "INSERT INTO pages (id, file_name, source_path, source_hash, sort_order, included, rotation_degrees) VALUES ($id, $name, $path, $hash, $order, $included, $rotation);";
+            command.CommandText = """
+                INSERT INTO pages (id, file_name, source_path, source_hash, sort_order, included, rotation_degrees)
+                VALUES ($id, $name, $path, $hash, $order, $included, $rotation)
+                ON CONFLICT(id) DO UPDATE SET
+                    file_name = excluded.file_name,
+                    source_path = excluded.source_path,
+                    source_hash = excluded.source_hash,
+                    sort_order = excluded.sort_order,
+                    included = excluded.included,
+                    rotation_degrees = excluded.rotation_degrees;
+                """;
             command.Parameters.AddWithValue("$id", page.Id.ToString("D"));
             command.Parameters.AddWithValue("$name", page.FileName);
             command.Parameters.AddWithValue("$path", page.SourcePath);
