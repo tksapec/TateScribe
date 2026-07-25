@@ -76,6 +76,23 @@ public sealed class ProofreadingPackageTests : IDisposable
     }
 
     [Fact]
+    public async Task Export_preserves_the_original_image_extension_in_the_stable_package_name()
+    {
+        Directory.CreateDirectory(_directory);
+        var source = Path.Combine(_directory, "source.jpg");
+        await File.WriteAllBytesAsync(source, [0xFF, 0xD8, 0xFF]);
+        var output = Path.Combine(_directory, "proofreading.zip");
+        var request = new ProofreadingPackageRequest(Guid.NewGuid(), "Book", Guid.NewGuid(), output, ProofreadingPackageFormat.Zip,
+            [new ProofreadingPackagePage(Guid.NewGuid(), 0, "source.jpg", "hash", source, null, "本文", null, 0, "Body", "ReflowVertical")]);
+
+        await new ProofreadingPackageExporter().ExportAsync(request, CancellationToken.None);
+
+        using var archive = ZipFile.OpenRead(output);
+        Assert.Contains(archive.Entries, entry => entry.FullName == "images-original/PAGE-0001.jpg");
+        Assert.DoesNotContain(archive.Entries, entry => entry.FullName == "images-original/PAGE-0001.png");
+    }
+
+    [Fact]
     public async Task Repository_validates_a_batch_before_saving_confirmed_text()
     {
         Directory.CreateDirectory(_directory);
@@ -92,6 +109,26 @@ public sealed class ProofreadingPackageTests : IDisposable
 
         Assert.DoesNotContain(preview.Issues, issue => issue.IsError);
         Assert.Equal("確定本文", (await repository.LoadPageTextStateAsync(page.Id, CancellationToken.None)).ConfirmedText);
+    }
+
+    [Fact]
+    public async Task Repository_saves_only_pages_selected_from_an_import_preview()
+    {
+        Directory.CreateDirectory(_directory);
+        await using var repository = await SqliteProjectRepository.CreateAsync(_directory, CancellationToken.None);
+        var first = new ProjectPage(Guid.NewGuid(), "one.png", "C:\\one.png", "one", 0, true, 0);
+        var second = new ProjectPage(Guid.NewGuid(), "two.png", "C:\\two.png", "two", 1, true, 0);
+        await repository.SavePagesAsync([first, second], CancellationToken.None);
+        var projectId = await repository.GetProjectIdAsync(CancellationToken.None);
+        var batchId = Guid.NewGuid();
+        await repository.RecordProofreadingExportAsync(batchId, [first.Id, second.Id], CancellationToken.None);
+
+        var preview = await repository.PrepareConfirmedImportAsync(new ProofreadingImportDocument(1, projectId, batchId,
+            [new ProofreadingImportPage("0001", "first confirmed"), new ProofreadingImportPage("0002", "second confirmed")]), CancellationToken.None);
+        await repository.SaveConfirmedTextAsync(preview, new HashSet<string>(StringComparer.Ordinal) { "0002" }, CancellationToken.None);
+
+        Assert.Null((await repository.LoadPageTextStateAsync(first.Id, CancellationToken.None)).ConfirmedText);
+        Assert.Equal("second confirmed", (await repository.LoadPageTextStateAsync(second.Id, CancellationToken.None)).ConfirmedText);
     }
 
     [Fact]

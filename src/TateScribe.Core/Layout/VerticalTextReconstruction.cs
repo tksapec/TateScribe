@@ -7,8 +7,31 @@ public sealed record ReviewItem(string Code, string Message, OcrWord? Word);
 
 public sealed record ReconstructedPage(string Text, IReadOnlyList<ReviewItem> ReviewItems);
 
+public sealed record ReadingOrderOcrWord(int RawOrdinal, OcrWord Word);
+
 public static class VerticalTextReconstruction
 {
+    public static IReadOnlyList<OcrWord> OrderWordsForReading(IReadOnlyList<OcrWord> words, double columnTolerance) =>
+        OrderWordsForReadingWithRawOrdinals(words, columnTolerance).Select(word => word.Word).ToArray();
+
+    public static IReadOnlyList<ReadingOrderOcrWord> OrderWordsForReadingWithRawOrdinals(IReadOnlyList<OcrWord> words, double columnTolerance)
+    {
+        var filteredWords = RubyFilter.ExcludeCandidates(words);
+        var consumedRawOrdinals = new HashSet<int>();
+        var indexedWords = filteredWords.Select(word =>
+        {
+            var rawOrdinal = Enumerable.Range(0, words.Count).First(ordinal => !consumedRawOrdinals.Contains(ordinal) && words[ordinal] == word);
+            consumedRawOrdinals.Add(rawOrdinal);
+            return new ReadingOrderOcrWord(rawOrdinal, word);
+        }).ToArray();
+        var glyphs = indexedWords.Select(indexed => new Glyph(indexed.Word.Text, (indexed.Word.Left + indexed.Word.Right) / 2, indexed.Word.Top)).ToArray();
+        var lookup = indexedWords.GroupBy(indexed => new Glyph(indexed.Word.Text, (indexed.Word.Left + indexed.Word.Right) / 2, indexed.Word.Top))
+            .ToDictionary(group => group.Key, group => new Queue<ReadingOrderOcrWord>(group));
+        return VerticalReadingOrder.OrderColumns(glyphs, columnTolerance)
+            .SelectMany(column => column.Select(glyph => lookup[glyph].Dequeue()))
+            .ToArray();
+    }
+
     public static ReconstructedPage Reconstruct(IReadOnlyList<OcrWord> words, double columnTolerance, double lowConfidenceThreshold)
     {
         ArgumentOutOfRangeException.ThrowIfNegative(lowConfidenceThreshold);

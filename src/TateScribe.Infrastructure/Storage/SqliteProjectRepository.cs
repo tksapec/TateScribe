@@ -85,6 +85,12 @@ public sealed class SqliteProjectRepository : IAsyncDisposable
     public async Task ReplaceOcrWordsAsync(Guid pageId, string engine, string modelVersion, IReadOnlyList<OcrWord> words, CancellationToken cancellationToken)
     {
         await using var transaction = _connection.BeginTransaction();
+        await ReplaceOcrWordsAsync(transaction, pageId, engine, modelVersion, words, cancellationToken);
+        await transaction.CommitAsync(cancellationToken);
+    }
+
+    private async Task ReplaceOcrWordsAsync(SqliteTransaction transaction, Guid pageId, string engine, string modelVersion, IReadOnlyList<OcrWord> words, CancellationToken cancellationToken)
+    {
         var clear = _connection.CreateCommand();
         clear.Transaction = transaction;
         clear.CommandText = "DELETE FROM ocr_words WHERE page_id = $pageId;";
@@ -108,7 +114,6 @@ public sealed class SqliteProjectRepository : IAsyncDisposable
             insert.Parameters.AddWithValue("$bottom", word.Bottom);
             await insert.ExecuteNonQueryAsync(cancellationToken);
         }
-        await transaction.CommitAsync(cancellationToken);
     }
 
     public async Task SaveManualTextAsync(Guid pageId, string text, CancellationToken cancellationToken)
@@ -243,8 +248,8 @@ public sealed class SqliteProjectRepository : IAsyncDisposable
 
     public async Task SaveOcrAnalysisAsync(Guid pageId, OcrPageResult paddle, string rawTesseractText, OcrMergeProposal proposal, CancellationToken cancellationToken)
     {
-        await ReplaceOcrWordsAsync(pageId, paddle.Engine, paddle.ModelVersion, paddle.Words, cancellationToken);
         await using var transaction = _connection.BeginTransaction();
+        await ReplaceOcrWordsAsync(transaction, pageId, paddle.Engine, paddle.ModelVersion, paddle.Words, cancellationToken);
         var executedAt = DateTimeOffset.UtcNow;
         var rubyCandidates = paddle.Words.Except(RubyFilter.ExcludeCandidates(paddle.Words)).ToHashSet();
         await SaveOcrRunAsync(transaction, pageId, paddle.Engine, paddle.ModelVersion, paddle.Words, executedAt, rubyCandidates, cancellationToken);
@@ -314,18 +319,28 @@ public sealed class SqliteProjectRepository : IAsyncDisposable
     public async Task<PageTextState> LoadPageTextStateAsync(Guid pageId, CancellationToken cancellationToken)
     {
         var command = _connection.CreateCommand();
-        command.CommandText = "SELECT engine, model_version, text, confidence, left_x, top_y, right_x, bottom_y FROM ocr_words WHERE page_id = $pageId ORDER BY ordinal;";
+        command.CommandText = "SELECT engine, model_version, text, confidence, left_x, top_y, right_x, bottom_y, coordinate_status FROM ocr_words WHERE page_id = $pageId ORDER BY ordinal;";
         command.Parameters.AddWithValue("$pageId", pageId.ToString("D"));
         var words = new List<OcrWord>();
         var engine = "none";
         var model = "none";
+        var rawPaddleCoordinatesKnown = true;
+        string? legacyMergedText = null;
         await using (var reader = await command.ExecuteReaderAsync(cancellationToken))
         {
             while (await reader.ReadAsync(cancellationToken))
             {
                 engine = reader.GetString(0);
                 model = reader.GetString(1);
-                words.Add(new OcrWord(reader.GetString(2), reader.GetDouble(3), reader.GetDouble(4), reader.GetDouble(5), reader.GetDouble(6), reader.GetDouble(7)));
+                var text = reader.GetString(2);
+                if (string.Equals(engine, "legacy-merged", StringComparison.Ordinal))
+                {
+                    rawPaddleCoordinatesKnown = false;
+                    legacyMergedText ??= text;
+                    continue;
+                }
+                rawPaddleCoordinatesKnown &= string.Equals(reader.GetString(8), "Known", StringComparison.Ordinal);
+                words.Add(new OcrWord(text, reader.GetDouble(3), reader.GetDouble(4), reader.GetDouble(5), reader.GetDouble(6), reader.GetDouble(7)));
             }
         }
         var manual = _connection.CreateCommand();
@@ -355,7 +370,7 @@ public sealed class SqliteProjectRepository : IAsyncDisposable
                 confirmedSource = confirmedReader.GetString(2);
             }
         }
-        return new PageTextState(pageId, manualText, engine, model, words, rawTesseractText, suggestedText, confirmedText, confirmedAt, confirmedSource);
+        return new PageTextState(pageId, manualText, engine, model, words, rawTesseractText, suggestedText, confirmedText, confirmedAt, confirmedSource, rawPaddleCoordinatesKnown, legacyMergedText);
     }
 
     public async Task<IReadOnlyList<OcrRunInfo>> LoadOcrRunsAsync(Guid pageId, CancellationToken cancellationToken)
@@ -469,6 +484,7 @@ public sealed class SqliteProjectRepository : IAsyncDisposable
                 top_y REAL NOT NULL,
                 right_x REAL NOT NULL,
                 bottom_y REAL NOT NULL,
+                coordinate_status TEXT NOT NULL DEFAULT 'Known',
                 PRIMARY KEY (page_id, ordinal)
             );
             CREATE TABLE IF NOT EXISTS manual_page_text (
@@ -522,12 +538,25 @@ public sealed class SqliteProjectRepository : IAsyncDisposable
         foreach (var statement in new[]
         {
             "ALTER TABLE pages ADD COLUMN crop_left REAL NOT NULL DEFAULT 0;", "ALTER TABLE pages ADD COLUMN crop_top REAL NOT NULL DEFAULT 0;", "ALTER TABLE pages ADD COLUMN crop_right REAL NOT NULL DEFAULT 1;", "ALTER TABLE pages ADD COLUMN crop_bottom REAL NOT NULL DEFAULT 1;",
-            "ALTER TABLE pages ADD COLUMN display_profile TEXT NOT NULL DEFAULT 'ReflowVertical';", "ALTER TABLE pages ADD COLUMN page_role TEXT NOT NULL DEFAULT 'Body';", "ALTER TABLE pages ADD COLUMN printed_page_number TEXT NULL;", "ALTER TABLE pages ADD COLUMN proofreading_status TEXT NOT NULL DEFAULT 'NotOcrProcessed';", "ALTER TABLE pages ADD COLUMN review_item_count INTEGER NOT NULL DEFAULT 0;"
+            "ALTER TABLE pages ADD COLUMN display_profile TEXT NOT NULL DEFAULT 'ReflowVertical';", "ALTER TABLE pages ADD COLUMN page_role TEXT NOT NULL DEFAULT 'Body';", "ALTER TABLE pages ADD COLUMN printed_page_number TEXT NULL;", "ALTER TABLE pages ADD COLUMN proofreading_status TEXT NOT NULL DEFAULT 'NotOcrProcessed';", "ALTER TABLE pages ADD COLUMN review_item_count INTEGER NOT NULL DEFAULT 0;", "ALTER TABLE ocr_words ADD COLUMN coordinate_status TEXT NOT NULL DEFAULT 'Known';"
         })
         {
             try { var migration = _connection.CreateCommand(); migration.Transaction = transaction; migration.CommandText = statement; await migration.ExecuteNonQueryAsync(cancellationToken); }
             catch (SqliteException) { }
         }
+        var legacyMigration = _connection.CreateCommand();
+        legacyMigration.Transaction = transaction;
+        legacyMigration.CommandText = """
+            INSERT INTO ocr_merge_proposals (page_id, suggested_text, created_utc)
+            SELECT page_id, text, $utc FROM ocr_words WHERE engine = 'paddle+tesseract'
+            ON CONFLICT(page_id) DO NOTHING;
+            UPDATE ocr_words SET engine = 'legacy-merged', coordinate_status = 'Unknown'
+            WHERE engine = 'paddle+tesseract' AND left_x = 0 AND top_y = 0 AND right_x = 1 AND bottom_y = 1;
+            UPDATE pages SET proofreading_status = 'ReviewRequired', review_item_count = CASE WHEN review_item_count < 1 THEN 1 ELSE review_item_count END
+            WHERE id IN (SELECT page_id FROM ocr_words WHERE engine = 'legacy-merged');
+            """;
+        legacyMigration.Parameters.AddWithValue("$utc", DateTimeOffset.UtcNow.ToString("O"));
+        await legacyMigration.ExecuteNonQueryAsync(cancellationToken);
         var version = _connection.CreateCommand();
         version.Transaction = transaction;
         version.CommandText = "UPDATE schema_version SET version = 1;";

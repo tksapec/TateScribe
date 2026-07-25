@@ -2,9 +2,22 @@ namespace TateScribe.Core.Export;
 
 public static class BookDocumentAssembler
 {
+    public static string CreateChapterPageText(string text)
+    {
+        var lines = text.Split(["\r\n", "\r", "\n"], StringSplitOptions.None);
+        var titleIndex = Array.FindIndex(lines, line => !string.IsNullOrWhiteSpace(line));
+        if (titleIndex < 0) return string.Empty;
+        var title = lines[titleIndex].Trim();
+        var body = lines[(titleIndex + 1)..];
+        return body.Length == 0
+            ? $"[[CHAPTER:{title}]]"
+            : $"[[CHAPTER:{title}]]\n{string.Join("\n", body)}";
+    }
+
     public static ExportDocument Assemble(IEnumerable<string> pageTexts)
     {
-        var text = string.Concat(pageTexts.Where(text => !string.IsNullOrWhiteSpace(text)));
+        var text = string.Concat(pageTexts.Where(text => !string.IsNullOrWhiteSpace(text))
+            .Select(pageText => IsStandaloneStructureMarker(pageText) ? $"{pageText}\n" : pageText));
         var paragraphs = new List<ExportParagraph>();
         foreach (var sourceLine in text.Split(["\r\n", "\r", "\n"], StringSplitOptions.RemoveEmptyEntries))
         {
@@ -33,5 +46,16 @@ public static class BookDocumentAssembler
         }
         paragraph = null;
         return false;
+    }
+
+    private static bool IsStandaloneStructureMarker(string text)
+    {
+        var line = text.Trim();
+        return !line.Contains('\n')
+            && line.EndsWith("]]", StringComparison.Ordinal)
+            && (line.StartsWith("[[CHAPTER:", StringComparison.Ordinal)
+                || line.StartsWith("[[TITLE:", StringComparison.Ordinal)
+                || line.StartsWith("[[SECTION_TITLE:", StringComparison.Ordinal)
+                || line.StartsWith("[[SECTION:", StringComparison.Ordinal));
     }
 }

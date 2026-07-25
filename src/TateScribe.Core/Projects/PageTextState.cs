@@ -12,7 +12,9 @@ public sealed record PageTextState(
     string? SuggestedText = null,
     string? ConfirmedText = null,
     DateTimeOffset? ConfirmedAt = null,
-    string? ConfirmedSource = null)
+    string? ConfirmedSource = null,
+    bool RawPaddleCoordinatesKnown = true,
+    string? LegacyMergedText = null)
 {
     public IReadOnlyList<OcrWord> RawPaddleWords => MachineWords;
 

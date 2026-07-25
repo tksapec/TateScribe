@@ -53,7 +53,9 @@ public sealed class ProofreadingPackageExporter
         {
             var page = request.Pages[index];
             var marker = (index + 1).ToString("0000", System.Globalization.CultureInfo.InvariantCulture);
-            var originalRelativePath = $"images-original/PAGE-{marker}.png";
+            var originalExtension = Path.GetExtension(page.OriginalImagePath);
+            if (string.IsNullOrWhiteSpace(originalExtension)) originalExtension = ".png";
+            var originalRelativePath = $"images-original/PAGE-{marker}{originalExtension.ToLowerInvariant()}";
             var originalDestination = Path.Combine(root, originalRelativePath.Replace('/', Path.DirectorySeparatorChar));
             File.Copy(page.OriginalImagePath, originalDestination, overwrite: false);
             string? croppedRelativePath = null;

@@ -11,8 +11,20 @@ public static class PunctuationMerger
 
     public static OcrMergeProposal Propose(string primary, string auxiliary, IReadOnlyList<OcrWord> paddleWords, int lookAhead)
     {
+        return ProposeCore(primary, auxiliary, paddleWords.Select((word, ordinal) => new ReadingOrderOcrWord(ordinal, word)).ToArray(), lookAhead);
+    }
+
+    public static OcrMergeProposal ProposeWithRawWordOrdinals(string primary, string auxiliary, IReadOnlyList<ReadingOrderOcrWord> paddleWords, int lookAhead)
+    {
+        return ProposeCore(primary, auxiliary, paddleWords, lookAhead);
+    }
+
+    private static OcrMergeProposal ProposeCore(string primary, string auxiliary, IReadOnlyList<ReadingOrderOcrWord> paddleWords, int lookAhead)
+    {
         var suggested = Merge(primary, auxiliary, lookAhead);
-        var operations = BuildOperations(primary, suggested, paddleWords);
+        var operations = BuildOperations(primary, suggested, paddleWords).ToList();
+        if (operations.Count == 0 && !string.IsNullOrWhiteSpace(auxiliary) && !string.Equals(primary, auxiliary, StringComparison.Ordinal))
+            operations.Add(new OcrMergeOperation(OcrMergeOperationType.Insertion, 0, string.Empty, auxiliary, null, 0, "UnanchoredSuggestion"));
         var reviewItems = operations
             .Where(operation => operation.AnchorWordOrdinal is null)
             .Select(operation => new ReviewItem(
@@ -60,7 +72,7 @@ public static class PunctuationMerger
         return NormalizeSafeDuplicateQuotes(RecoverQuotedKatakanaTitleAfterNiyoru(result.ToString()));
     }
 
-    private static IReadOnlyList<OcrMergeOperation> BuildOperations(string primary, string suggested, IReadOnlyList<OcrWord> paddleWords)
+    private static IReadOnlyList<OcrMergeOperation> BuildOperations(string primary, string suggested, IReadOnlyList<ReadingOrderOcrWord> paddleWords)
     {
         var operations = new List<OcrMergeOperation>();
         var primaryIndex = 0;
@@ -114,16 +126,24 @@ public static class PunctuationMerger
         return (bestPrimary, bestSuggested);
     }
 
-    private static int? FindAnchorWordOrdinal(string primary, int primaryIndex, IReadOnlyList<OcrWord> paddleWords)
+    private static int? FindAnchorWordOrdinal(string primary, int primaryIndex, IReadOnlyList<ReadingOrderOcrWord> paddleWords)
     {
         if (paddleWords.Count == 0) return null;
-        var offset = 0;
+        var searchStart = 0;
+        int? previousOrdinal = null;
         for (var index = 0; index < paddleWords.Count; index++)
         {
-            offset += paddleWords[index].Text.Length;
-            if (primaryIndex < offset) return index;
+            var word = paddleWords[index];
+            var wordStart = primary.IndexOf(word.Word.Text, searchStart, StringComparison.Ordinal);
+            if (wordStart < 0) continue;
+            var wordEnd = wordStart + word.Word.Text.Length;
+            if (primaryIndex >= wordStart && primaryIndex < wordEnd) return word.RawOrdinal;
+            if (primaryIndex == wordEnd) previousOrdinal = word.RawOrdinal;
+            if (primaryIndex < wordStart) return previousOrdinal ?? word.RawOrdinal;
+            previousOrdinal = word.RawOrdinal;
+            searchStart = wordEnd;
         }
-        return paddleWords.Count - 1;
+        return previousOrdinal;
     }
 
     private static void AddSupplementaryGap(string primary, string auxiliary, int primaryStart, int primaryEnd, int auxiliaryStart, int auxiliaryEnd, Dictionary<int, StringBuilder> insertions, Dictionary<int, string> replacements, bool hasReliableContext)

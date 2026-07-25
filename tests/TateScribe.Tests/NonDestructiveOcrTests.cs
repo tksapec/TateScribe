@@ -27,6 +27,16 @@ public sealed class NonDestructiveOcrTests : IDisposable
     }
 
     [Fact]
+    public void Propose_marks_unaligned_auxiliary_text_as_unanchored_without_changing_raw_text()
+    {
+        var proposal = PunctuationMerger.Propose("甲", "乙", [], 16);
+
+        Assert.Equal("甲", proposal.SuggestedText);
+        Assert.Contains(proposal.ReviewItems, item => item.Code == "UnanchoredSuggestion");
+        Assert.Contains(proposal.Operations, operation => operation.AnchorWordOrdinal is null && operation.ProposedText == "乙");
+    }
+
+    [Fact]
     public async Task Saving_a_merge_proposal_preserves_raw_paddle_words_and_auxiliary_text()
     {
         Directory.CreateDirectory(_directory);
@@ -50,6 +60,24 @@ public sealed class NonDestructiveOcrTests : IDisposable
         var run = Assert.Single(runs, run => run.Engine == "paddle");
         Assert.Equal(("paddle", "model-a"), (run.Engine, run.ModelVersion));
         Assert.Contains(runs, run => run.Engine == "tesseract" && run.ModelVersion == "jpn_vert");
+    }
+
+    [Fact]
+    public void Propose_with_reading_order_words_persists_the_raw_paddle_ordinal_as_its_anchor()
+    {
+        var rawWords = new[]
+        {
+            new OcrWord("A", .9, 0, 20, 10, 40),
+            new OcrWord("B", .9, 100, 20, 110, 40),
+            new OcrWord("C", .9, 100, 42, 110, 62),
+            new OcrWord("D", .9, 100, 64, 110, 84)
+        };
+        var orderedWords = VerticalTextReconstruction.OrderWordsForReadingWithRawOrdinals(rawWords, 20);
+
+        var proposal = PunctuationMerger.ProposeWithRawWordOrdinals("BCDA", "BC\u3001DA", orderedWords, 16);
+
+        Assert.Equal([1, 2, 3, 0], orderedWords.Select(word => word.RawOrdinal).ToArray());
+        Assert.Contains(proposal.Operations, operation => operation.ProposedText == "\u3001" && operation.AnchorWordOrdinal == 3);
     }
 
     public void Dispose()

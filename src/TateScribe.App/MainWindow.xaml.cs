@@ -199,7 +199,8 @@ public partial class MainWindow : Window
         PrintedPageNumberEditor.Text = selected.PrintedPageNumber ?? string.Empty;
         var reconstruction = VerticalTextReconstruction.Reconstruct(textState.MachineWords, 20, 0.75);
         TextEditor.Text = textState.ConfirmedText ?? textState.ManualText ?? textState.SuggestedText ?? reconstruction.Text;
-        TextSourceStatus.Text = textState.ConfirmedText is not null ? "表示中: ChatGPT取込み済み確定本文" :
+        TextSourceStatus.Text = textState.LegacyMergedText is not null ? "表示中: 旧統合OCRの補正候補（元の座標は不明です）" :
+            textState.ConfirmedText is not null ? "表示中: ChatGPT取込み済み確定本文" :
             textState.ManualText is not null ? "表示中: 手動修正文" :
             textState.SuggestedText is not null ? "表示中: 補正候補（OCR原本は保持されています）" : "表示中: PaddleOCR原本から復元した下書き";
         var source = new BitmapImage(new Uri(selected.SourcePath, UriKind.Absolute));
@@ -352,8 +353,9 @@ public partial class MainWindow : Window
                 MessageBox.Show(this, $"検証エラーのため本文は保存しません。{Environment.NewLine}{details}", "校正結果の検証", MessageBoxButton.OK, MessageBoxImage.Warning);
                 return;
             }
-            if (MessageBox.Show(this, $"校正結果の差分を確認してください。{Environment.NewLine}{details}{Environment.NewLine}表示した全ページを確定本文として保存しますか？", "校正結果の検証", MessageBoxButton.YesNo, MessageBoxImage.Question) != MessageBoxResult.Yes) return;
-            await repository.SaveConfirmedTextAsync(preview, new HashSet<string>(preview.Candidates.Select(candidate => candidate.PageMarker), StringComparer.Ordinal), CancellationToken.None);
+            var selection = new ProofreadingImportWindow(preview, details) { Owner = this };
+            if (selection.ShowDialog() != true) return;
+            await repository.SaveConfirmedTextAsync(preview, selection.AcceptedMarkers, CancellationToken.None);
             _pages = (await repository.LoadPagesAsync(CancellationToken.None)).ToList();
             RefreshPages();
             ReviewStatus.Text = $"校正済み本文を {preview.Candidates.Count} ページ保存しました。";
@@ -408,7 +410,7 @@ public partial class MainWindow : Window
                 if (state.ConfirmedText is null) unproofreadPages++;
                 if (!string.IsNullOrWhiteSpace(text))
                 {
-                    pageTexts.Add(page.PageRole == PageRole.ChapterTitle ? $"[[CHAPTER:{text}]]" : text);
+                    pageTexts.Add(page.PageRole == PageRole.ChapterTitle ? BookDocumentAssembler.CreateChapterPageText(text) : text);
                 }
                 else skippedPages++;
             }
@@ -476,7 +478,8 @@ public partial class MainWindow : Window
                     var tesseract = await worker.RecognizeAsync(new OcrRequest(Guid.NewGuid().ToString("N"), "tesseract", prepared.CachePath), _ocrCancellation.Token);
                     var paddleText = VerticalTextReconstruction.Reconstruct(paddle.Words, 20, 0.75).Text;
                     var rawTesseractText = string.Concat(tesseract.Words.Select(word => word.Text));
-                    var proposal = PunctuationMerger.Propose(paddleText, rawTesseractText, paddle.Words, 16);
+                    var orderedPaddleWords = VerticalTextReconstruction.OrderWordsForReadingWithRawOrdinals(paddle.Words, 20);
+                    var proposal = PunctuationMerger.ProposeWithRawWordOrdinals(paddleText, rawTesseractText, orderedPaddleWords, 16);
                     await repository.SaveOcrAnalysisAsync(page.Id, paddle, rawTesseractText, proposal, _ocrCancellation.Token);
                     if (PageList.SelectedItem is ProjectPage selected && selected.Id == page.Id)
                     {
