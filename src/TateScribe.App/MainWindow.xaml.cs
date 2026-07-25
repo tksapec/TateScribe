@@ -65,9 +65,10 @@ public partial class MainWindow : Window
             {
                 IsEnabled = false;
                 var pages = await new ImageImporter().ImportAsync(dialog.FileNames, CancellationToken.None);
+                var mergedPages = PageImportMerger.AppendNew(_pages, pages);
                 await using var repository = await SqliteProjectRepository.CreateAsync(_projectDirectory, CancellationToken.None);
-                await repository.SavePagesAsync(pages, CancellationToken.None);
-                _pages = pages.ToList();
+                await repository.SavePagesAsync(mergedPages, CancellationToken.None);
+                _pages = mergedPages.ToList();
                 RefreshPages();
             }
             catch (Exception exception)
