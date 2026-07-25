@@ -26,16 +26,24 @@ public sealed class JsonLinesOcrWorker(string pythonExecutable, string workerScr
         {
             await process.StandardInput.WriteLineAsync(JsonSerializer.Serialize(new WorkerRequest(1, request.RequestId, request.Engine, request.ImagePath), JsonOptions).AsMemory(), cancellationToken);
             await process.StandardInput.FlushAsync(cancellationToken);
-            var responseLine = await process.StandardOutput.ReadLineAsync(cancellationToken);
-            if (string.IsNullOrWhiteSpace(responseLine))
+            process.StandardInput.Close();
+            while (await process.StandardOutput.ReadLineAsync(cancellationToken) is { } responseLine)
             {
-                var standardError = await process.StandardError.ReadToEndAsync(cancellationToken);
-                throw new OcrWorkerException($"OCR worker returned no response. {standardError}".Trim(), true);
+                WorkerResponse? response;
+                try
+                {
+                    response = JsonSerializer.Deserialize<WorkerResponse>(responseLine, JsonOptions);
+                }
+                catch (JsonException)
+                {
+                    continue;
+                }
+                if (response?.ProtocolVersion != 1 || response.RequestId != request.RequestId) continue;
+                if (!string.Equals(response.Status, "ok", StringComparison.Ordinal)) throw new OcrWorkerException(response.Error ?? "OCR worker failed.", true);
+                return new OcrPageResult(response.RequestId, response.Engine ?? request.Engine, response.ModelVersion ?? "unknown", response.Words ?? []);
             }
-            var response = JsonSerializer.Deserialize<WorkerResponse>(responseLine, JsonOptions) ?? throw new OcrWorkerException("OCR worker returned malformed JSON.", true);
-            if (response.ProtocolVersion != 1 || response.RequestId != request.RequestId) throw new OcrWorkerException("OCR worker response did not match the request.", true);
-            if (!string.Equals(response.Status, "ok", StringComparison.Ordinal)) throw new OcrWorkerException(response.Error ?? "OCR worker failed.", true);
-            return new OcrPageResult(response.RequestId, response.Engine ?? request.Engine, response.ModelVersion ?? "unknown", response.Words ?? []);
+            var standardError = await process.StandardError.ReadToEndAsync(cancellationToken);
+            throw new OcrWorkerException($"OCR worker returned no matching response. {standardError}".Trim(), true);
         }
         catch (OperationCanceledException)
         {

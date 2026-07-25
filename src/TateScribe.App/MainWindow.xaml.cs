@@ -4,6 +4,9 @@ using System.Windows;
 using TateScribe.Core.Projects;
 using TateScribe.Core.Export;
 using TateScribe.Infrastructure.Export;
+using TateScribe.Infrastructure.Ocr;
+using TateScribe.Core.Ocr;
+using TateScribe.Core.Layout;
 using TateScribe.Infrastructure.Import;
 using TateScribe.Infrastructure.Storage;
 
@@ -98,7 +101,7 @@ public partial class MainWindow : Window
         if (_projectDirectory is null || PageList.SelectedItem is not ProjectPage selected) return;
         await using var repository = await SqliteProjectRepository.CreateAsync(_projectDirectory, CancellationToken.None);
         var textState = await repository.LoadPageTextStateAsync(selected.Id, CancellationToken.None);
-        TextEditor.Text = textState.ManualText ?? string.Concat(textState.MachineWords.Select(word => word.Text));
+        TextEditor.Text = textState.ManualText ?? VerticalTextReconstruction.Reconstruct(textState.MachineWords, 20, 0.75).Text;
     }
 
     private async void SaveManualText(object sender, RoutedEventArgs e)
@@ -119,7 +122,7 @@ public partial class MainWindow : Window
             foreach (var page in _pages.Where(page => page.IsIncluded).OrderBy(page => page.SortOrder))
             {
                 var state = await repository.LoadPageTextStateAsync(page.Id, CancellationToken.None);
-                var text = state.ManualText ?? string.Concat(state.MachineWords.Select(word => word.Text));
+                var text = state.ManualText ?? VerticalTextReconstruction.Reconstruct(state.MachineWords, 20, 0.75).Text;
                 if (!string.IsNullOrWhiteSpace(text)) blocks.Add(new ExportParagraph(ExportStyle.Normal, text));
             }
             var outputPath = BookFolderPaths.GetDocumentPath(_projectDirectory);
@@ -129,6 +132,35 @@ public partial class MainWindow : Window
         catch (Exception exception)
         {
             MessageBox.Show(this, exception.Message, "DOCX出力に失敗しました", MessageBoxButton.OK, MessageBoxImage.Error);
+        }
+        finally
+        {
+            IsEnabled = true;
+        }
+    }
+
+    private async void RunOcr(object sender, RoutedEventArgs e)
+    {
+        if (_projectDirectory is null || PageList.SelectedItem is not ProjectPage selected) return;
+        var python = Path.Combine(Directory.GetCurrentDirectory(), "ocr-runtime", "Scripts", "python.exe");
+        var workerScript = Path.Combine(Directory.GetCurrentDirectory(), "ocr-worker", "worker.py");
+        if (!File.Exists(python) || !File.Exists(workerScript))
+        {
+            MessageBox.Show(this, "ローカルOCRランタイムが見つかりません。scripts/setup-ocr.ps1 を実行してください。", "TateScribe", MessageBoxButton.OK, MessageBoxImage.Warning);
+            return;
+        }
+        try
+        {
+            IsEnabled = false;
+            await using var worker = new JsonLinesOcrWorker(python, workerScript);
+            var result = await worker.RecognizeAsync(new OcrRequest(Guid.NewGuid().ToString("N"), "paddle", selected.SourcePath), CancellationToken.None);
+            await using var repository = await SqliteProjectRepository.CreateAsync(_projectDirectory, CancellationToken.None);
+            await repository.ReplaceOcrWordsAsync(selected.Id, result.Engine, result.ModelVersion, result.Words, CancellationToken.None);
+            TextEditor.Text = VerticalTextReconstruction.Reconstruct(result.Words, 20, 0.75).Text;
+        }
+        catch (OcrWorkerException exception)
+        {
+            MessageBox.Show(this, exception.Message, "OCRを実行できません", MessageBoxButton.OK, MessageBoxImage.Error);
         }
         finally
         {
