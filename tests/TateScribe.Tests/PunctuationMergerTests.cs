@@ -43,4 +43,44 @@ public sealed class PunctuationMergerTests
 
         Assert.Equal("な荷物を持た成瀬", result);
     }
+
+    [Fact]
+    public void Merge_inserts_a_missing_long_vowel_mark_between_matching_characters()
+    {
+        var result = PunctuationMerger.Merge("ロカル", "ローカル", 16);
+
+        Assert.Equal("ローカル", result);
+    }
+
+    [Fact]
+    public void Merge_treats_an_ocr_square_bracket_as_an_opening_quote()
+    {
+        var result = PunctuationMerger.Merge("番組ぐるりん", "番組[ぐるりん", 16);
+
+        Assert.Equal("番組「ぐるりん", result);
+    }
+
+    [Fact]
+    public void Merge_keeps_an_opening_quote_when_the_following_body_character_differs()
+    {
+        var result = PunctuationMerger.Merge("芸人に糊の", "芸人に「着の", 16);
+
+        Assert.Equal("芸人に「糊の", result);
+    }
+
+    [Fact]
+    public void Merge_inserts_a_trailing_long_vowel_mark_after_an_otherwise_matching_word()
+    {
+        var result = PunctuationMerger.Merge("レポタ", "レポーター", 16);
+
+        Assert.Equal("レポーター", result);
+    }
+
+    [Fact]
+    public void Merge_restores_a_long_vowel_mark_and_opening_quote_in_a_program_title()
+    {
+        var result = PunctuationMerger.Merge("成瀬は夕方のロカル番組ぐるりんワイド」に出演する", "成瀬は夕方のローカル番組[ぐるりんワイド」に出演する", 16);
+
+        Assert.Equal("成瀬は夕方のローカル番組「ぐるりんワイド」に出演する", result);
+    }
 }

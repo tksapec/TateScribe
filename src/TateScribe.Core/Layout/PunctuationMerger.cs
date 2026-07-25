@@ -4,13 +4,14 @@ namespace TateScribe.Core.Layout;
 
 public static class PunctuationMerger
 {
-    private const string PunctuationAndQuotes = "\u3001\u3002\uFF01\uFF1F\u300C\u300D\u300E\u300F\uFF08\uFF09\u2026";
+    private const string PunctuationAndQuotes = "\u3001\u3002\uFF01\uFF1F\u300C\u300D\u300E\u300F\uFF08\uFF09\u2026\u30FC";
     private const int MaximumAlignmentCells = 4_000_000;
 
     public static string Merge(string primary, string auxiliary, int lookAhead)
     {
         if (string.IsNullOrEmpty(primary) || string.IsNullOrEmpty(auxiliary)) return primary;
         _ = lookAhead;
+        auxiliary = auxiliary.Replace('[', '\u300C').Replace(']', '\u300D');
         var matches = FindLongestCommonSubsequence(primary, auxiliary);
         if (matches.Count == 0) return primary;
         var insertions = new Dictionary<int, StringBuilder>();
@@ -19,11 +20,11 @@ public static class PunctuationMerger
         for (var matchIndex = 0; matchIndex < matches.Count; matchIndex++)
         {
             var (primaryIndex, auxiliaryIndex) = matches[matchIndex];
-            AddSupplementaryGap(primary, auxiliary, previousPrimaryIndex + 1, primaryIndex, previousAuxiliaryIndex + 1, auxiliaryIndex, insertions, HasReliableContext(matches, matchIndex - 1, matchIndex));
+            AddSupplementaryGap(primary, auxiliary, previousPrimaryIndex + 1, primaryIndex, previousAuxiliaryIndex + 1, auxiliaryIndex, insertions, HasReliableContext(primary, auxiliary, matches, matchIndex - 1, matchIndex));
             previousPrimaryIndex = primaryIndex;
             previousAuxiliaryIndex = auxiliaryIndex;
         }
-        AddSupplementaryGap(primary, auxiliary, previousPrimaryIndex + 1, primary.Length, previousAuxiliaryIndex + 1, auxiliary.Length, insertions, HasReliableContext(matches, matches.Count - 1, matches.Count));
+        AddSupplementaryGap(primary, auxiliary, previousPrimaryIndex + 1, primary.Length, previousAuxiliaryIndex + 1, auxiliary.Length, insertions, HasReliableContext(primary, auxiliary, matches, matches.Count - 1, matches.Count));
 
         var result = new StringBuilder(primary.Length + insertions.Sum(pair => pair.Value.Length));
         for (var index = 0; index <= primary.Length; index++)
@@ -38,34 +39,62 @@ public static class PunctuationMerger
     {
         var primaryGap = primary.AsSpan(primaryStart, primaryEnd - primaryStart);
         var auxiliaryGap = auxiliary.AsSpan(auxiliaryStart, auxiliaryEnd - auxiliaryStart);
-        if (!hasReliableContext || auxiliaryGap.IsEmpty || !ContainsOnlyWhitespace(primaryGap) || !ContainsOnlySupplementaryCharacters(auxiliaryGap)) return;
-        if (!insertions.TryGetValue(primaryStart, out var supplementaryCharacters))
-            insertions[primaryStart] = supplementaryCharacters = new StringBuilder();
-        supplementaryCharacters.Append(auxiliaryGap);
+        if (!hasReliableContext || auxiliaryGap.IsEmpty) return;
+        if (ContainsOnlyWhitespace(primaryGap) && ContainsOnlySupplementaryCharacters(auxiliaryGap))
+        {
+            AddInsertion(insertions, primaryStart, auxiliaryGap);
+            return;
+        }
+
+        var leadingSupplementaryCharacterCount = LeadingSupplementaryCharacterCount(auxiliaryGap);
+        if (primaryGap.Length == auxiliaryGap.Length - leadingSupplementaryCharacterCount && leadingSupplementaryCharacterCount > 0 && ContainsOnlyOpeningQuoteMarkers(auxiliaryGap[..leadingSupplementaryCharacterCount]))
+            AddInsertion(insertions, primaryStart, auxiliaryGap[..leadingSupplementaryCharacterCount]);
     }
 
-    private static bool HasReliableContext(IReadOnlyList<(int PrimaryIndex, int AuxiliaryIndex)> matches, int leftMatchIndex, int rightMatchIndex)
+    private static void AddInsertion(Dictionary<int, StringBuilder> insertions, int primaryStart, ReadOnlySpan<char> text)
+    {
+        if (!insertions.TryGetValue(primaryStart, out var supplementaryCharacters))
+            insertions[primaryStart] = supplementaryCharacters = new StringBuilder();
+        supplementaryCharacters.Append(text);
+    }
+
+    private static int LeadingSupplementaryCharacterCount(ReadOnlySpan<char> text)
+    {
+        var count = 0;
+        while (count < text.Length && IsSupplementaryCharacter(text[count])) count++;
+        return count;
+    }
+
+    private static bool ContainsOnlyOpeningQuoteMarkers(ReadOnlySpan<char> text)
+    {
+        foreach (var character in text)
+            if (character is not ('\u300C' or '\u300E' or '\uFF08')) return false;
+        return true;
+    }
+
+    private static bool HasReliableContext(string primary, string auxiliary, IReadOnlyList<(int PrimaryIndex, int AuxiliaryIndex)> matches, int leftMatchIndex, int rightMatchIndex)
     {
         var contiguousLeft = 0;
         for (var index = leftMatchIndex; index >= 0; index--)
         {
-            if (index < leftMatchIndex && !AreAdjacent(matches[index], matches[index + 1])) break;
+            if (index < leftMatchIndex && !AreAdjacent(primary, auxiliary, matches[index], matches[index + 1])) break;
             contiguousLeft++;
         }
 
         var contiguousRight = 0;
         for (var index = rightMatchIndex; index < matches.Count; index++)
         {
-            if (index > rightMatchIndex && !AreAdjacent(matches[index - 1], matches[index])) break;
+            if (index > rightMatchIndex && !AreAdjacent(primary, auxiliary, matches[index - 1], matches[index])) break;
             contiguousRight++;
         }
         if (leftMatchIndex < 0 || rightMatchIndex >= matches.Count)
-            return Math.Max(contiguousLeft, contiguousRight) >= 4;
+            return Math.Max(contiguousLeft, contiguousRight) >= 4 || Math.Max(contiguousLeft, contiguousRight) == matches.Count && matches.Count >= 3;
         return contiguousLeft + contiguousRight >= 3;
     }
 
-    private static bool AreAdjacent((int PrimaryIndex, int AuxiliaryIndex) first, (int PrimaryIndex, int AuxiliaryIndex) second) =>
-        first.PrimaryIndex + 1 == second.PrimaryIndex && first.AuxiliaryIndex + 1 == second.AuxiliaryIndex;
+    private static bool AreAdjacent(string primary, string auxiliary, (int PrimaryIndex, int AuxiliaryIndex) first, (int PrimaryIndex, int AuxiliaryIndex) second) =>
+        first.PrimaryIndex + 1 == second.PrimaryIndex
+        && ContainsOnlySupplementaryCharacters(auxiliary.AsSpan(first.AuxiliaryIndex + 1, second.AuxiliaryIndex - first.AuxiliaryIndex - 1));
 
     private static bool ContainsOnlyWhitespace(ReadOnlySpan<char> text)
     {
