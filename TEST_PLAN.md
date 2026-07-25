@@ -8,7 +8,7 @@
 - Evidence safety: illustration/caption classifications are excluded only when confirmed; user edits survive re-OCR; duplicate candidates remain review items.
 - Storage: create/save/load retains page order, source hash, crop, state, OCR evidence, and revisions.
 - Worker protocol: valid JSON Lines is parsed, cancellation terminates the request, malformed output and process exit become retryable errors.
-- DOCX: headings map to Word styles, body uses Normal, paragraph indent is paragraph formatting, ruby XML is emitted, and page markers/images/captions are absent.
+- DOCX: headings map to Word styles, body uses Normal, paragraph indent is paragraph formatting, ruby XML is emitted, and page markers/images/captions are absent. Screenshot boundaries must not create Word page breaks.
 
 ## Manual acceptance
 

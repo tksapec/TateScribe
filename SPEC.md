@@ -10,7 +10,7 @@ TateScribe is an offline Windows application that converts a user-selected seque
 - All images, OCR results, text, and telemetry stay local. No network request is made while OCR runs.
 - A bundled Python 3.11 OCR worker communicates with the app only through UTF-8 JSON Lines on standard input/output. PaddleOCR is the primary adapter; Tesseract Japanese vertical is an optional adapter.
 - Original images are immutable. Per-project SQLite stores metadata, normalized crop regions, OCR evidence, revisions, and export settings; derived images are cache entries.
-- The default document is horizontal: body uses Word Normal, chapter/section/subsection use Heading 1/2/3, paragraph indentation is paragraph formatting, and ruby uses Word ruby XML.
+- The default document is horizontal: body uses Word Normal, chapter/section/subsection use Heading 1/2/3, paragraph indentation is paragraph formatting, and ruby uses Word ruby XML. It does not reproduce the screenshot layout and never creates page breaks from screenshot boundaries.
 
 ## Functional behaviour
 

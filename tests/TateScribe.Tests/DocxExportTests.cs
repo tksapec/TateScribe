@@ -24,6 +24,7 @@ public sealed class DocxExportTests : IDisposable
         Assert.Contains("Heading1", xml, StringComparison.Ordinal);
         Assert.Contains("ruby", xml, StringComparison.OrdinalIgnoreCase);
         Assert.DoesNotContain("ScreenshotBoundary", xml, StringComparison.Ordinal);
+        Assert.DoesNotContain("w:type=\"page\"", xml, StringComparison.Ordinal);
     }
 
     public void Dispose()
