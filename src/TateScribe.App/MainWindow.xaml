@@ -9,6 +9,7 @@
       <ColumnDefinition Width="*" />
     </Grid.ColumnDefinitions>
     <DockPanel Grid.Column="0">
+      <Button DockPanel.Dock="Top" Margin="0,0,0,8" Padding="12,6" Click="CreateProject">プロジェクトを作成／開く</Button>
       <Button DockPanel.Dock="Top" Margin="0,0,0,12" Padding="12,6" Click="ImportImages">画像を追加</Button>
       <ListBox x:Name="PageList" DisplayMemberPath="Name" />
     </DockPanel>
