@@ -24,3 +24,13 @@ dotnet run --project .\src\TateScribe.App
 OCRワーカーの依存導入は `scripts/setup-ocr.ps1` を使います。リリース時にはOCRモデルをローカル同梱し、実行時のダウンロードを禁止します。依存固定とライセンスは [THIRD_PARTY.md](THIRD_PARTY.md) を参照してください。
 
 `scripts/package.ps1` は自己完結の `artifacts/win-x64` と、配布用の `artifacts/TateScribe-win-x64.zip` を生成します。OCRランタイムを同梱するため、ZIPは大きくなります。
+
+## EXEから起動する
+
+自己完結版は次のEXEをダブルクリックして起動できます。.NET SDKやPowerShellを起動する必要はありません。
+
+```text
+artifacts\TateScribe-win-x64\TateScribe.App.exe
+```
+
+OCRも利用する場合は、EXEと同じフォルダーにある `ocr-runtime` と `ocr-worker` フォルダーを削除・移動しないでください。
