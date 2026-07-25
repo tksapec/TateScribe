@@ -10,7 +10,7 @@ public sealed class ScreenshotPreprocessorTests : IDisposable
     [Fact]
     public async Task Prepare_creates_deterministic_cache_without_changing_source()
     {
-        var source = Path.Combine(FindRepositoryRoot(), "testdata", "IMG_20260725_083157.png");
+        var source = Path.Combine(FindRepositoryRoot(), "testdata", "成瀬は天下を取りにいく", "IMG_20260725_083157.png");
         var originalHash = Convert.ToHexString(await System.Security.Cryptography.SHA256.HashDataAsync(File.OpenRead(source)));
 
         var first = await new ScreenshotPreprocessor().PrepareAsync(source, _cacheDirectory, NormalizedCrop.Full, 0, CancellationToken.None);

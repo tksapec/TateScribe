@@ -8,15 +8,15 @@ public sealed class TestDataImportTests
     public async Task Import_orders_each_sample_book_by_embedded_capture_time_and_hashes_sources()
     {
         var root = FindRepositoryRoot();
-        var files = Directory.EnumerateFiles(Path.Combine(root, "testdata"), "*.png");
+        var files = Directory.EnumerateFiles(Path.Combine(root, "testdata", "7つの会議"), "*.png");
 
         var pages = await new ImageImporter().ImportAsync(files, CancellationToken.None);
 
-        Assert.Equal(20, pages.Count);
+        Assert.Equal(10, pages.Count);
         Assert.Equal("IMG_20260505_132622.png", pages[0].FileName);
-        Assert.Equal("IMG_20260725_083219.png", pages[^1].FileName);
+        Assert.Equal("IMG_20260505_132644.png", pages[^1].FileName);
         Assert.All(pages, page => Assert.Equal(64, page.SourceHash.Length));
-        Assert.Equal(Enumerable.Range(0, 20), pages.Select(page => page.SortOrder));
+        Assert.Equal(Enumerable.Range(0, 10), pages.Select(page => page.SortOrder));
     }
 
     private static string FindRepositoryRoot()

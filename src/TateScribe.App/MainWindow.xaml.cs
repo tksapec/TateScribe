@@ -28,6 +28,17 @@ public partial class MainWindow : Window
             Title = $"TateScribe — {_projectDirectory}";
             await using var repository = await SqliteProjectRepository.CreateAsync(_projectDirectory, CancellationToken.None);
             _pages = (await repository.LoadPagesAsync(CancellationToken.None)).ToList();
+            if (_pages.Count == 0)
+            {
+                var images = Directory.EnumerateFiles(_projectDirectory, "*", SearchOption.TopDirectoryOnly)
+                    .Where(path => new[] { ".png", ".jpg", ".jpeg", ".webp" }.Contains(Path.GetExtension(path), StringComparer.OrdinalIgnoreCase))
+                    .ToArray();
+                if (images.Length > 0)
+                {
+                    _pages = (await new ImageImporter().ImportAsync(images, CancellationToken.None)).ToList();
+                    await repository.SavePagesAsync(_pages, CancellationToken.None);
+                }
+            }
             RefreshPages();
         }
     }
@@ -100,13 +111,6 @@ public partial class MainWindow : Window
     private async void ExportDocx(object sender, RoutedEventArgs e)
     {
         if (_projectDirectory is null || _pages.Count == 0) return;
-        var dialog = new SaveFileDialog
-        {
-            Filter = "Word 文書|*.docx",
-            FileName = "TateScribe.docx",
-            InitialDirectory = _projectDirectory
-        };
-        if (dialog.ShowDialog(this) != true) return;
         try
         {
             IsEnabled = false;
@@ -118,8 +122,9 @@ public partial class MainWindow : Window
                 var text = state.ManualText ?? string.Concat(state.MachineWords.Select(word => word.Text));
                 if (!string.IsNullOrWhiteSpace(text)) blocks.Add(new ExportParagraph(ExportStyle.Normal, text));
             }
-            await new OpenXmlDocumentExporter().ExportAsync(new ExportDocument(blocks), dialog.FileName, CancellationToken.None);
-            MessageBox.Show(this, "DOCXを出力しました。", "TateScribe", MessageBoxButton.OK, MessageBoxImage.Information);
+            var outputPath = BookFolderPaths.GetDocumentPath(_projectDirectory);
+            await new OpenXmlDocumentExporter().ExportAsync(new ExportDocument(blocks), outputPath, CancellationToken.None);
+            MessageBox.Show(this, $"DOCXを出力しました。{Environment.NewLine}{outputPath}", "TateScribe", MessageBoxButton.OK, MessageBoxImage.Information);
         }
         catch (Exception exception)
         {
