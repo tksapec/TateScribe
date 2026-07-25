@@ -17,7 +17,9 @@ public sealed class OpenXmlDocumentExporter : IDocumentExporter
         mainPart.Document = new Document(new Body());
         foreach (var item in document.Paragraphs)
         {
-            var paragraph = new Paragraph(new ParagraphProperties(new ParagraphStyleId { Val = item.Style.ToString() }));
+            var properties = new ParagraphProperties(new ParagraphStyleId { Val = item.Style.ToString() });
+            if (document.PageBreakBeforeChapters && item.Role == DocumentElementRole.ChapterTitle) properties.Append(new PageBreakBefore());
+            var paragraph = new Paragraph(properties);
             if (item.Ruby is null)
             {
                 paragraph.Append(new Run(new Text(item.Text) { Space = SpaceProcessingModeValues.Preserve }));

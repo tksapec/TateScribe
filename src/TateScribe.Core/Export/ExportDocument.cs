@@ -2,11 +2,20 @@ namespace TateScribe.Core.Export;
 
 public enum ExportStyle { Normal, Heading1, Heading2, Heading3 }
 
+public enum DocumentElementRole
+{
+    ChapterTitle,
+    SectionTitle,
+    SectionNumber,
+    BodyParagraph,
+    SceneBreak
+}
+
 public sealed record RubyAnnotation(string ParentText, string RubyText);
 
-public sealed record ExportParagraph(ExportStyle Style, string Text, RubyAnnotation? Ruby = null);
+public sealed record ExportParagraph(ExportStyle Style, string Text, RubyAnnotation? Ruby = null, DocumentElementRole Role = DocumentElementRole.BodyParagraph);
 
-public sealed record ExportDocument(IReadOnlyList<ExportParagraph> Paragraphs);
+public sealed record ExportDocument(IReadOnlyList<ExportParagraph> Paragraphs, bool PageBreakBeforeChapters = false);
 
 public interface IDocumentExporter
 {

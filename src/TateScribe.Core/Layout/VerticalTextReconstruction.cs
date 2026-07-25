@@ -3,7 +3,7 @@ using System.Text;
 
 namespace TateScribe.Core.Layout;
 
-public sealed record ReviewItem(string Code, string Message, OcrWord Word);
+public sealed record ReviewItem(string Code, string Message, OcrWord? Word);
 
 public sealed record ReconstructedPage(string Text, IReadOnlyList<ReviewItem> ReviewItems);
 

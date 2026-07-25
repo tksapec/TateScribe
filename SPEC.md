@@ -11,6 +11,7 @@ TateScribe is an offline Windows application that converts a user-selected seque
 - A bundled Python 3.11 OCR worker communicates with the app only through UTF-8 JSON Lines on standard input/output. PaddleOCR is the primary adapter; Tesseract Japanese vertical is an optional adapter.
 - Original images are immutable. Per-project SQLite stores metadata, normalized crop regions, OCR evidence, revisions, and export settings; derived images are cache entries.
 - The default document is horizontal: body uses Word Normal, chapter/section/subsection use Heading 1/2/3, paragraph indentation is paragraph formatting, and ruby uses Word ruby XML. It does not reproduce the screenshot layout and never creates page breaks from screenshot boundaries.
+- Proofreading is a manual package exchange: TateScribe writes a versioned ZIP/folder for ChatGPT attachment and imports a marker-preserving result only after local validation. It never calls an AI API or transmits project data.
 
 ## Functional behaviour
 
@@ -21,6 +22,8 @@ TateScribe is an offline Windows application that converts a user-selected seque
 5. Keep low-confidence, ruby, title, illustration/caption, duplicate, paragraph, and scene-break decisions reviewable. Re-OCR must not overwrite manual text or structural edits.
 6. Provide a project workspace with thumbnail list, image/crop review, OCR/evidence review, text/structure editing, issue list, and export status.
 7. Export DOCX without Word installed, plus optional plain text, OCR JSON, and issue CSV. Do not export screenshot-boundary markers, screenshots, captions, or image-contained text as body text.
+8. Retain Raw Paddle words and coordinates, Raw Tesseract text, merge proposals, manual text, and confirmed text independently. Confirmed text wins over manual, proposed, and reconstructed drafts.
+9. Require matching project and batch identifiers for proofreading imports; validate page markers, range, order, structure, and unusually large text deltas before any confirmed text is saved.
 
 ## Acceptance criteria
 

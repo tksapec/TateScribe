@@ -1,4 +1,5 @@
 using System.Text;
+using TateScribe.Core.Ocr;
 
 namespace TateScribe.Core.Layout;
 
@@ -7,6 +8,20 @@ public static class PunctuationMerger
     private const string PunctuationAndQuotes = "\u3001\u3002\uFF01\uFF1F\u300C\u300D\u300E\u300F\uFF08\uFF09\u2026\u30FC\n";
     private const int MaximumAlignmentCells = 4_000_000;
     private const int MaximumTrustedSupplementaryGapLength = 12;
+
+    public static OcrMergeProposal Propose(string primary, string auxiliary, IReadOnlyList<OcrWord> paddleWords, int lookAhead)
+    {
+        var suggested = Merge(primary, auxiliary, lookAhead);
+        var operations = BuildOperations(primary, suggested, paddleWords);
+        var reviewItems = operations
+            .Where(operation => operation.AnchorWordOrdinal is null)
+            .Select(operation => new ReviewItem(
+                "UnanchoredSuggestion",
+                $"Supplementary OCR suggestion '{operation.ProposedText}' has no PaddleOCR coordinate anchor.",
+                null))
+            .ToArray();
+        return new OcrMergeProposal(suggested, operations, reviewItems);
+    }
 
     public static string Merge(string primary, string auxiliary, int lookAhead)
     {
@@ -43,6 +58,72 @@ public static class PunctuationMerger
             if (index < primary.Length) result.Append(primary[index]);
         }
         return NormalizeSafeDuplicateQuotes(RecoverQuotedKatakanaTitleAfterNiyoru(result.ToString()));
+    }
+
+    private static IReadOnlyList<OcrMergeOperation> BuildOperations(string primary, string suggested, IReadOnlyList<OcrWord> paddleWords)
+    {
+        var operations = new List<OcrMergeOperation>();
+        var primaryIndex = 0;
+        var suggestedIndex = 0;
+        while (primaryIndex < primary.Length || suggestedIndex < suggested.Length)
+        {
+            if (primaryIndex < primary.Length && suggestedIndex < suggested.Length && primary[primaryIndex] == suggested[suggestedIndex])
+            {
+                primaryIndex++;
+                suggestedIndex++;
+                continue;
+            }
+
+            var next = FindNextMatchingCharacter(primary, suggested, primaryIndex, suggestedIndex);
+            var primaryEnd = next.PrimaryIndex < 0 ? primary.Length : next.PrimaryIndex;
+            var suggestedEnd = next.SuggestedIndex < 0 ? suggested.Length : next.SuggestedIndex;
+            var original = primary[primaryIndex..primaryEnd];
+            var proposed = suggested[suggestedIndex..suggestedEnd];
+            var type = original.Length == 0
+                ? OcrMergeOperationType.Insertion
+                : proposed.Length == 0 ? OcrMergeOperationType.Deletion : OcrMergeOperationType.Replacement;
+            operations.Add(new OcrMergeOperation(
+                type,
+                suggestedIndex,
+                original,
+                proposed,
+                FindAnchorWordOrdinal(primary, primaryIndex, paddleWords),
+                0.8,
+                ContainsOnlySupplementaryCharacters(proposed.AsSpan()) ? "AuxiliarySupplement" : "AuxiliaryCorrection"));
+            primaryIndex = primaryEnd;
+            suggestedIndex = suggestedEnd;
+        }
+        return operations;
+    }
+
+    private static (int PrimaryIndex, int SuggestedIndex) FindNextMatchingCharacter(string primary, string suggested, int primaryStart, int suggestedStart)
+    {
+        var bestPrimary = -1;
+        var bestSuggested = -1;
+        var bestDistance = int.MaxValue;
+        for (var primaryIndex = primaryStart; primaryIndex < primary.Length; primaryIndex++)
+        for (var suggestedIndex = suggestedStart; suggestedIndex < suggested.Length; suggestedIndex++)
+        {
+            if (primary[primaryIndex] != suggested[suggestedIndex]) continue;
+            var distance = primaryIndex - primaryStart + suggestedIndex - suggestedStart;
+            if (distance >= bestDistance) continue;
+            bestPrimary = primaryIndex;
+            bestSuggested = suggestedIndex;
+            bestDistance = distance;
+        }
+        return (bestPrimary, bestSuggested);
+    }
+
+    private static int? FindAnchorWordOrdinal(string primary, int primaryIndex, IReadOnlyList<OcrWord> paddleWords)
+    {
+        if (paddleWords.Count == 0) return null;
+        var offset = 0;
+        for (var index = 0; index < paddleWords.Count; index++)
+        {
+            offset += paddleWords[index].Text.Length;
+            if (primaryIndex < offset) return index;
+        }
+        return paddleWords.Count - 1;
     }
 
     private static void AddSupplementaryGap(string primary, string auxiliary, int primaryStart, int primaryEnd, int auxiliaryStart, int auxiliaryEnd, Dictionary<int, StringBuilder> insertions, Dictionary<int, string> replacements, bool hasReliableContext)

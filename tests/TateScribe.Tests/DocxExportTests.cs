@@ -42,6 +42,18 @@ public sealed class DocxExportTests : IDisposable
         Assert.NotNull(section.GetFirstChild<PageMargin>());
     }
 
+    [Fact]
+    public async Task Export_adds_a_page_break_before_chapters_only_when_enabled()
+    {
+        var exporter = new OpenXmlDocumentExporter();
+        var document = new ExportDocument([new ExportParagraph(ExportStyle.Heading1, "第一章", null, DocumentElementRole.ChapterTitle)], PageBreakBeforeChapters: true);
+
+        await exporter.ExportAsync(document, _path, CancellationToken.None);
+
+        using var word = WordprocessingDocument.Open(_path, false);
+        Assert.Contains("pageBreakBefore", word.MainDocumentPart!.Document.OuterXml, StringComparison.OrdinalIgnoreCase);
+    }
+
     public void Dispose()
     {
         if (File.Exists(_path)) File.Delete(_path);

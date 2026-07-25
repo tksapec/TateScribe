@@ -14,7 +14,10 @@
       <Button x:Name="RunOcrButton" DockPanel.Dock="Top" Margin="0,0,0,8" Padding="12,6" Click="RunOcr">OCRを実行</Button>
       <Button x:Name="RunAllOcrButton" DockPanel.Dock="Top" Margin="0,0,0,8" Padding="12,6" Click="RunAllOcr">全ページをOCR</Button>
       <Button x:Name="CancelOcrButton" DockPanel.Dock="Top" Margin="0,0,0,12" Padding="12,6" Click="CancelOcr" IsEnabled="False">OCRを中止</Button>
+      <Button DockPanel.Dock="Top" Margin="0,0,0,8" Padding="12,6" Click="ExportProofreadingPackage">校正用パッケージを出力</Button>
+      <Button DockPanel.Dock="Top" Margin="0,0,0,12" Padding="12,6" Click="ImportProofreadText">校正済みテキストを取り込む</Button>
       <Button DockPanel.Dock="Top" Margin="0,0,0,12" Padding="12,6" Click="ExportDocx">DOCXへ出力</Button>
+      <CheckBox x:Name="PageBreakBeforeChapters" DockPanel.Dock="Top" Margin="0,0,0,8">章タイトルの前で改ページ</CheckBox>
       <StackPanel DockPanel.Dock="Bottom" Orientation="Horizontal" HorizontalAlignment="Center" Margin="0,12,0,0">
         <Button Width="76" Padding="8,6" Margin="0,0,8,0" Click="MovePageUp">上へ</Button>
         <Button Width="76" Padding="8,6" Click="MovePageDown">下へ</Button>
@@ -25,16 +28,35 @@
       </StackPanel>
       <StackPanel DockPanel.Dock="Bottom" Margin="0,0,0,8">
         <StackPanel Orientation="Horizontal" HorizontalAlignment="Center">
+          <TextBlock VerticalAlignment="Center" FontSize="12" Text="左%" />
+          <TextBox x:Name="CropLeftPercent" Width="38" Margin="3,0,0,0" />
           <TextBlock VerticalAlignment="Center" FontSize="12" Text="上部除外%" />
           <TextBox x:Name="CropTopPercent" Width="42" Margin="3,0,0,0" />
           <TextBlock VerticalAlignment="Center" FontSize="12" Margin="8,0,0,0" Text="下部除外%" />
           <TextBox x:Name="CropBottomPercent" Width="42" Margin="3,0,0,0" />
+          <TextBlock VerticalAlignment="Center" FontSize="12" Margin="8,0,0,0" Text="右%" />
+          <TextBox x:Name="CropRightPercent" Width="38" Margin="3,0,0,0" />
         </StackPanel>
         <Button Width="144" HorizontalAlignment="Center" Margin="0,6,0,0" Padding="8,4" Click="ApplyCrop">切り抜きを適用</Button>
         <Button Width="144" HorizontalAlignment="Center" Margin="0,4,0,0" Padding="8,4" Click="ApplyCropToAll">全ページに適用</Button>
       </StackPanel>
+      <StackPanel DockPanel.Dock="Bottom" Margin="0,0,0,8">
+        <ComboBox x:Name="DisplayProfileSelector" Margin="0,0,0,4" />
+        <ComboBox x:Name="PageRoleSelector" Margin="0,0,0,4" />
+        <TextBox x:Name="PrintedPageNumberEditor" Margin="0,0,0,4" ToolTip="印刷ページ番号" />
+        <Button Padding="8,4" Click="SavePageMetadata">ページ種別・表示形式を保存</Button>
+      </StackPanel>
+      <StackPanel DockPanel.Dock="Bottom" Margin="0,0,0,8">
+        <StackPanel Orientation="Horizontal" HorizontalAlignment="Center">
+          <TextBlock VerticalAlignment="Center" FontSize="12" Text="校正範囲 開始" />
+          <TextBox x:Name="ProofreadingStartPage" Width="34" Margin="3,0,0,0" Text="1" />
+          <TextBlock VerticalAlignment="Center" FontSize="12" Margin="6,0,0,0" Text="件数" />
+          <TextBox x:Name="ProofreadingPageCount" Width="34" Margin="3,0,0,0" Text="10" />
+        </StackPanel>
+        <CheckBox x:Name="IncludeCroppedImages" Margin="0,4,0,0" IsChecked="True" HorizontalAlignment="Center">切り抜き確認画像を含める</CheckBox>
+      </StackPanel>
       <Button DockPanel.Dock="Bottom" Margin="0,0,0,8" Padding="12,6" Click="TogglePageUsage">使用／除外</Button>
-      <ListBox x:Name="PageList" DisplayMemberPath="FileName" SelectionChanged="PageSelectionChanged" />
+      <ListBox x:Name="PageList" DisplayMemberPath="DisplayLabel" SelectionChanged="PageSelectionChanged" />
     </DockPanel>
     <Border Grid.Column="2" BorderBrush="Gray" BorderThickness="1" CornerRadius="4" Padding="24">
       <Grid>
@@ -47,6 +69,7 @@
         <TextBlock FontSize="28">TateScribe</TextBlock>
         <StackPanel Grid.Row="1" Margin="0,12,0,12">
           <TextBlock TextWrapping="Wrap">OCR根拠を保持した本文編集。低信頼度文字は確定せず、確認後に保存してください。</TextBlock>
+          <TextBlock x:Name="TextSourceStatus" Margin="0,6,0,0" Foreground="SlateGray" TextWrapping="Wrap" />
           <TextBlock x:Name="ReviewStatus" Margin="0,6,0,0" Foreground="DarkOrange" />
         </StackPanel>
         <Grid Grid.Row="2">
@@ -68,8 +91,12 @@
                   <Canvas x:Name="CropOverlay" IsHitTestVisible="False">
                     <Border x:Name="TopCropOverlay" Background="#66000000" HorizontalAlignment="Stretch" />
                     <Border x:Name="BottomCropOverlay" Background="#66000000" HorizontalAlignment="Stretch" Canvas.Bottom="0" />
+                    <Border x:Name="LeftCropOverlay" Background="#66000000" VerticalAlignment="Stretch" />
+                    <Border x:Name="RightCropOverlay" Background="#66000000" VerticalAlignment="Stretch" Canvas.Right="0" />
                     <TextBlock x:Name="TopCropLabel" Foreground="White" Margin="6,4" />
                     <TextBlock x:Name="BottomCropLabel" Foreground="White" Canvas.Bottom="4" Margin="6,0" />
+                    <TextBlock x:Name="LeftCropLabel" Foreground="White" Margin="6,24" />
+                    <TextBlock x:Name="RightCropLabel" Foreground="White" Canvas.Right="4" Margin="0,24" />
                   </Canvas>
                 </Grid>
               </ScrollViewer>

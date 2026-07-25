@@ -32,3 +32,9 @@
 
 1. Bundle Python runtime, wheels and downloaded model files into the win-x64 release without runtime downloads; record checksums/licenses.
 2. Run unit/protocol tests, manual sample-image acceptance, publish self-contained win-x64, inspect the archive, and tag each completed milestone in Git.
+
+## Phase 6 — Manual proofreading exchange
+
+1. Persist non-destructive Paddle/Tesseract runs, merge proposals, user edits, confirmed text, profile/role metadata, and status with idempotent SQLite migration.
+2. Export versioned proofreading ZIP/folder batches with stable page markers, source hashes, original/cropped images, review items, and offline instructions; import only matching batches after validation and explicit confirmation.
+3. Resolve confirmed text into structured DOCX paragraphs without screenshot-boundary breaks; preserve chapter/section markers and allow an optional page break before chapters.

@@ -9,10 +9,11 @@
 - Storage: create/save/load retains page order, source hash, crop, state, OCR evidence, and revisions.
 - Worker protocol: valid JSON Lines is parsed, cancellation terminates the request, malformed output and process exit become retryable errors.
 - DOCX: headings map to Word styles, body uses Normal, paragraph indent is paragraph formatting, ruby XML is emitted, and page markers/images/captions are absent. Screenshot boundaries must not create Word page breaks.
+- Proofreading exchange: raw Paddle coordinates survive Tesseract supplementation; packages include manifest/instructions/review list/stable images; mismatched, missing, duplicate, reordered, malformed, and extreme imports cannot silently overwrite text; confirmed text wins in DOCX output.
 
 ## Manual acceptance
 
-Use the eight supplied screenshots when available. Verify thumbnail import/order, crop preview, no UI freeze while the worker runs, review visibility for uncertain text/order, manual correction retention after re-OCR, output opening in Word without Word being required to generate it, and package launch on a clean Windows x64 machine.
+Use local reflow and fixed-page screenshot samples; do not commit them. Verify 4-edge crop preview, display-profile/page-role settings, OCR evidence retention, 10-page package alignment, original/cropped image mapping, import validation, confirmed-text persistence, excluded headers/page numbers, and Word output without screenshot-boundary breaks.
 
 ## Commands
 

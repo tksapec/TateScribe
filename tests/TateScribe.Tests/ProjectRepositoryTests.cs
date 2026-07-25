@@ -77,6 +77,25 @@ public sealed class ProjectRepositoryTests : IDisposable
         }
     }
 
+    [Fact]
+    public async Task Save_and_load_persists_profile_role_and_printed_page_number()
+    {
+        Directory.CreateDirectory(_directory);
+        await using var repository = await SqliteProjectRepository.CreateAsync(_directory, CancellationToken.None);
+        var page = new ProjectPage(
+            Guid.NewGuid(), "page.png", "C:\\page.png", "hash", 0, true, 0,
+            new NormalizedCrop(.1, .2, .9, .8), DisplayProfile.FixedPageVertical,
+            PageRole.MixedTitleAndBody, "42", ProofreadingStatus.ReviewRequired);
+
+        await repository.SavePagesAsync([page], CancellationToken.None);
+        var loaded = Assert.Single(await repository.LoadPagesAsync(CancellationToken.None));
+
+        Assert.Equal(DisplayProfile.FixedPageVertical, loaded.DisplayProfile);
+        Assert.Equal(PageRole.MixedTitleAndBody, loaded.PageRole);
+        Assert.Equal("42", loaded.PrintedPageNumber);
+        Assert.Equal(ProofreadingStatus.ReviewRequired, loaded.ProofreadingStatus);
+    }
+
     public void Dispose()
     {
         if (Directory.Exists(_directory)) Directory.Delete(_directory, recursive: true);

@@ -7,4 +7,14 @@ public sealed record PageTextState(
     string? ManualText,
     string Engine,
     string ModelVersion,
-    IReadOnlyList<OcrWord> MachineWords);
+    IReadOnlyList<OcrWord> MachineWords,
+    string? RawTesseractText = null,
+    string? SuggestedText = null,
+    string? ConfirmedText = null,
+    DateTimeOffset? ConfirmedAt = null,
+    string? ConfirmedSource = null)
+{
+    public IReadOnlyList<OcrWord> RawPaddleWords => MachineWords;
+
+    public string SelectedText => ConfirmedText ?? ManualText ?? SuggestedText ?? string.Empty;
+}

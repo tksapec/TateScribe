@@ -23,4 +23,24 @@ public sealed class BookDocumentAssemblerTests
             paragraph => Assert.Equal("甲", paragraph.Text),
             paragraph => Assert.Equal("乙丙", paragraph.Text));
     }
+
+    [Fact]
+    public void Assemble_maps_structure_markers_without_turning_page_markers_into_paragraphs()
+    {
+        var document = BookDocumentAssembler.Assemble(["""
+            [[PAGE:0001]]
+            [[CHAPTER:第一章]]
+            [[TITLE:始まり]]
+            [[SECTION_TITLE:小見出し]]
+            [[SECTION:1]]
+            本文
+            """]);
+
+        Assert.Collection(document.Paragraphs,
+            paragraph => Assert.Equal((ExportStyle.Heading1, DocumentElementRole.ChapterTitle, "第一章"), (paragraph.Style, paragraph.Role, paragraph.Text)),
+            paragraph => Assert.Equal((ExportStyle.Heading1, DocumentElementRole.ChapterTitle, "始まり"), (paragraph.Style, paragraph.Role, paragraph.Text)),
+            paragraph => Assert.Equal((ExportStyle.Heading2, DocumentElementRole.SectionTitle, "小見出し"), (paragraph.Style, paragraph.Role, paragraph.Text)),
+            paragraph => Assert.Equal((ExportStyle.Normal, DocumentElementRole.SectionNumber, "1"), (paragraph.Style, paragraph.Role, paragraph.Text)),
+            paragraph => Assert.Equal((ExportStyle.Normal, DocumentElementRole.BodyParagraph, "本文"), (paragraph.Style, paragraph.Role, paragraph.Text)));
+    }
 }
