@@ -431,6 +431,11 @@ public partial class MainWindow : Window
         }
     }
 
+    private void ShowChatGptProofreadingPrompt(object sender, RoutedEventArgs e)
+    {
+        new ChatGptProofreadingPromptWindow { Owner = this }.ShowDialog();
+    }
+
     private async void RunOcr(object sender, RoutedEventArgs e)
     {
         if (_projectDirectory is null || PageList.SelectedItem is not ProjectPage selected) return;

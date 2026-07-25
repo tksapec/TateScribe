@@ -17,7 +17,12 @@
       <Button DockPanel.Dock="Top" Margin="0,0,0,8" Padding="12,6" Click="ExportProofreadingPackage">校正用パッケージを出力</Button>
       <Button DockPanel.Dock="Top" Margin="0,0,0,12" Padding="12,6" Click="ImportProofreadText">校正済みテキストを取り込む</Button>
       <Button DockPanel.Dock="Top" Margin="0,0,0,12" Padding="12,6" Click="ExportDocx">DOCXへ出力</Button>
-      <CheckBox x:Name="PageBreakBeforeChapters" DockPanel.Dock="Top" Margin="0,0,0,8">章タイトルの前で改ページ</CheckBox>
+      <Button DockPanel.Dock="Top"
+              Margin="0,0,0,12"
+              Padding="12,6"
+              Click="ShowChatGptProofreadingPrompt"
+              ToolTip="ChatGPTへDOCXの最終校正を依頼するための、編集・コピー可能な指示文を表示します。">ChatGPT最終校正用の指示</Button>
+      <CheckBox x:Name="PageBreakBeforeChapters" DockPanel.Dock="Top" Margin="0,0,0,8" ToolTip="DOCX出力時の例: ページ種別を ChapterTitle にしたページを、新しいページから始めます。">章タイトルの前で改ページ</CheckBox>
       <StackPanel DockPanel.Dock="Bottom" Orientation="Horizontal" HorizontalAlignment="Center" Margin="0,12,0,0">
         <Button Width="76" Padding="8,6" Margin="0,0,8,0" Click="MovePageUp">上へ</Button>
         <Button Width="76" Padding="8,6" Click="MovePageDown">下へ</Button>
@@ -27,24 +32,40 @@
         <Button Width="92" Padding="8,6" Click="RotatePageRight">右へ90度</Button>
       </StackPanel>
       <StackPanel DockPanel.Dock="Bottom" Margin="0,0,0,8">
-        <StackPanel Orientation="Horizontal" HorizontalAlignment="Center">
-          <TextBlock VerticalAlignment="Center" FontSize="12" Text="左%" />
-          <TextBox x:Name="CropLeftPercent" Width="38" Margin="3,0,0,0" />
-          <TextBlock VerticalAlignment="Center" FontSize="12" Text="上部除外%" />
-          <TextBox x:Name="CropTopPercent" Width="42" Margin="3,0,0,0" />
-          <TextBlock VerticalAlignment="Center" FontSize="12" Margin="8,0,0,0" Text="下部除外%" />
-          <TextBox x:Name="CropBottomPercent" Width="42" Margin="3,0,0,0" />
-          <TextBlock VerticalAlignment="Center" FontSize="12" Margin="8,0,0,0" Text="右%" />
-          <TextBox x:Name="CropRightPercent" Width="38" Margin="3,0,0,0" />
-        </StackPanel>
+        <Grid HorizontalAlignment="Center">
+          <Grid.RowDefinitions>
+            <RowDefinition Height="Auto" />
+            <RowDefinition Height="Auto" />
+          </Grid.RowDefinitions>
+          <Grid.ColumnDefinitions>
+            <ColumnDefinition Width="Auto" />
+            <ColumnDefinition Width="Auto" />
+          </Grid.ColumnDefinitions>
+          <StackPanel Grid.Row="0" Grid.Column="0" Orientation="Horizontal" Margin="0,0,12,3">
+            <TextBlock VerticalAlignment="Center" FontSize="12" Text="左除外%" />
+            <TextBox x:Name="CropLeftPercent" Width="42" Margin="3,0,0,0" />
+          </StackPanel>
+          <StackPanel Grid.Row="0" Grid.Column="1" Orientation="Horizontal" Margin="0,0,0,3">
+            <TextBlock VerticalAlignment="Center" FontSize="12" Text="右除外%" />
+            <TextBox x:Name="CropRightPercent" Width="42" Margin="3,0,0,0" />
+          </StackPanel>
+          <StackPanel Grid.Row="1" Grid.Column="0" Orientation="Horizontal" Margin="0,0,12,0">
+            <TextBlock VerticalAlignment="Center" FontSize="12" Text="上部除外%" />
+            <TextBox x:Name="CropTopPercent" Width="42" Margin="3,0,0,0" />
+          </StackPanel>
+          <StackPanel Grid.Row="1" Grid.Column="1" Orientation="Horizontal">
+            <TextBlock VerticalAlignment="Center" FontSize="12" Text="下部除外%" />
+            <TextBox x:Name="CropBottomPercent" Width="42" Margin="3,0,0,0" />
+          </StackPanel>
+        </Grid>
         <Button Width="144" HorizontalAlignment="Center" Margin="0,6,0,0" Padding="8,4" Click="ApplyCrop">切り抜きを適用</Button>
         <Button Width="144" HorizontalAlignment="Center" Margin="0,4,0,0" Padding="8,4" Click="ApplyCropToAll">全ページに適用</Button>
       </StackPanel>
       <StackPanel DockPanel.Dock="Bottom" Margin="0,0,0,8">
-        <ComboBox x:Name="DisplayProfileSelector" Margin="0,0,0,4" />
-        <ComboBox x:Name="PageRoleSelector" Margin="0,0,0,4" />
-        <TextBox x:Name="PrintedPageNumberEditor" Margin="0,0,0,4" ToolTip="印刷ページ番号" />
-        <Button Padding="8,4" Click="SavePageMetadata">ページ種別・表示形式を保存</Button>
+        <ComboBox x:Name="DisplayProfileSelector" Margin="0,0,0,4" ToolTip="表示形式です。例: 通常の本文は ReflowVertical、印刷ページ単位を扱う場合は FixedPageVertical を選びます。" />
+        <ComboBox x:Name="PageRoleSelector" Margin="0,0,0,4" ToolTip="ページ種別です。例: 本文は Body、章見出しだけのページは ChapterTitle、挿絵は Illustration を選びます。Illustration、Blank、Other はDOCX本文から除外されます。" />
+        <TextBox x:Name="PrintedPageNumberEditor" Margin="0,0,0,4" ToolTip="印刷ページ番号です。FixedPageVertical を選んだページで、例: 42 のように入力します。" />
+        <Button Padding="8,4" Click="SavePageMetadata" ToolTip="選択した表示形式・ページ種別・印刷ページ番号を、現在選んでいるページへ保存します。">ページ種別・表示形式を保存</Button>
       </StackPanel>
       <StackPanel DockPanel.Dock="Bottom" Margin="0,0,0,8">
         <StackPanel Orientation="Horizontal" HorizontalAlignment="Center">
