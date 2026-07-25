@@ -1,0 +1,4 @@
+# Install these fixed packages into the bundled Python runtime during release assembly.
+paddlepaddle==3.2.0
+paddleocr==3.7.0
+pytesseract==0.3.13
