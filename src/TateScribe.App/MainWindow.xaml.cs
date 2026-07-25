@@ -160,6 +160,19 @@ public partial class MainWindow : Window
     private async void RunOcr(object sender, RoutedEventArgs e)
     {
         if (_projectDirectory is null || PageList.SelectedItem is not ProjectPage selected) return;
+        await RunOcrAsync([selected]);
+    }
+
+    private async void RunAllOcr(object sender, RoutedEventArgs e)
+    {
+        if (_projectDirectory is null || _pages.Count == 0) return;
+        await RunOcrAsync(_pages.OrderBy(page => page.SortOrder).ToArray());
+    }
+
+    private async Task RunOcrAsync(IReadOnlyList<ProjectPage> pages)
+    {
+        var projectDirectory = _projectDirectory;
+        if (projectDirectory is null) return;
         if (_ocrCancellation is not null) return;
         var python = ResolveRuntimePath("ocr-runtime", "Scripts", "python.exe");
         var workerScript = ResolveRuntimePath("ocr-worker", "worker.py");
@@ -172,16 +185,22 @@ public partial class MainWindow : Window
         {
             _ocrCancellation = new CancellationTokenSource();
             RunOcrButton.IsEnabled = false;
+            RunAllOcrButton.IsEnabled = false;
             CancelOcrButton.IsEnabled = true;
             await using var worker = new JsonLinesOcrWorker(python, workerScript);
-            var result = await worker.RecognizeAsync(new OcrRequest(Guid.NewGuid().ToString("N"), "paddle", selected.SourcePath), _ocrCancellation.Token);
-            await using var repository = await SqliteProjectRepository.CreateAsync(_projectDirectory, CancellationToken.None);
-            await repository.ReplaceOcrWordsAsync(selected.Id, result.Engine, result.ModelVersion, result.Words, CancellationToken.None);
-            var reconstruction = VerticalTextReconstruction.Reconstruct(result.Words, 20, 0.75);
-            TextEditor.Text = reconstruction.Text;
-            ReviewStatus.Text = reconstruction.ReviewItems.Count == 0
-                ? "要確認の低信頼度文字はありません。"
-                : $"要確認: 低信頼度文字 {reconstruction.ReviewItems.Count} 件";
+            await using var repository = await SqliteProjectRepository.CreateAsync(projectDirectory, CancellationToken.None);
+            for (var index = 0; index < pages.Count; index++)
+            {
+                var page = pages[index];
+                ReviewStatus.Text = $"OCR実行中: {index + 1}/{pages.Count} {page.FileName}";
+                var result = await worker.RecognizeAsync(new OcrRequest(Guid.NewGuid().ToString("N"), "paddle", page.SourcePath), _ocrCancellation.Token);
+                await repository.ReplaceOcrWordsAsync(page.Id, result.Engine, result.ModelVersion, result.Words, _ocrCancellation.Token);
+                if (PageList.SelectedItem is ProjectPage selected && selected.Id == page.Id)
+                {
+                    TextEditor.Text = VerticalTextReconstruction.Reconstruct(result.Words, 20, 0.75).Text;
+                }
+            }
+            ReviewStatus.Text = $"OCR完了: {pages.Count} ページ";
         }
         catch (OcrWorkerException exception)
         {
@@ -196,6 +215,7 @@ public partial class MainWindow : Window
             _ocrCancellation?.Dispose();
             _ocrCancellation = null;
             RunOcrButton.IsEnabled = true;
+            RunAllOcrButton.IsEnabled = true;
             CancelOcrButton.IsEnabled = false;
         }
     }

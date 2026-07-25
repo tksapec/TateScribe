@@ -12,6 +12,7 @@
       <Button DockPanel.Dock="Top" Margin="0,0,0,8" Padding="12,6" Click="CreateProject">プロジェクトを作成／開く</Button>
       <Button DockPanel.Dock="Top" Margin="0,0,0,12" Padding="12,6" Click="ImportImages">画像を追加</Button>
       <Button x:Name="RunOcrButton" DockPanel.Dock="Top" Margin="0,0,0,8" Padding="12,6" Click="RunOcr">OCRを実行</Button>
+      <Button x:Name="RunAllOcrButton" DockPanel.Dock="Top" Margin="0,0,0,8" Padding="12,6" Click="RunAllOcr">全ページをOCR</Button>
       <Button x:Name="CancelOcrButton" DockPanel.Dock="Top" Margin="0,0,0,12" Padding="12,6" Click="CancelOcr" IsEnabled="False">OCRを中止</Button>
       <Button DockPanel.Dock="Top" Margin="0,0,0,12" Padding="12,6" Click="ExportDocx">DOCXへ出力</Button>
       <StackPanel DockPanel.Dock="Bottom" Orientation="Horizontal" HorizontalAlignment="Center" Margin="0,12,0,0">
