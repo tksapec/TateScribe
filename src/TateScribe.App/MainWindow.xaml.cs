@@ -1,4 +1,5 @@
 using Microsoft.Win32;
+using System.Globalization;
 using System.IO;
 using System.Windows;
 using System.Windows.Media.Imaging;
@@ -125,6 +126,24 @@ public partial class MainWindow : Window
         PageList.SelectedItem = _pages.Single(page => page.Id == selected.Id);
     }
 
+    private async void ApplyCrop(object sender, RoutedEventArgs e)
+    {
+        if (_projectDirectory is null || PageList.SelectedItem is not ProjectPage selected) return;
+        if (!double.TryParse(CropTopPercent.Text, NumberStyles.Number, CultureInfo.CurrentCulture, out var topPercent) ||
+            !double.TryParse(CropBottomPercent.Text, NumberStyles.Number, CultureInfo.CurrentCulture, out var bottomPercent) ||
+            topPercent < 0 || bottomPercent < 0 || topPercent + bottomPercent >= 100)
+        {
+            MessageBox.Show(this, "上部・下部の除外率は合計100%未満の数値で指定してください。", "TateScribe", MessageBoxButton.OK, MessageBoxImage.Warning);
+            return;
+        }
+        var crop = new NormalizedCrop(0, topPercent / 100, 1, 1 - bottomPercent / 100);
+        _pages = _pages.Select(page => page.Id == selected.Id ? page with { Crop = crop } : page).ToList();
+        await using var repository = await SqliteProjectRepository.CreateAsync(_projectDirectory, CancellationToken.None);
+        await repository.SavePagesAsync(_pages, CancellationToken.None);
+        RefreshPages();
+        PageList.SelectedItem = _pages.Single(page => page.Id == selected.Id);
+    }
+
     private void RefreshPages() => PageList.ItemsSource = _pages.OrderBy(page => page.SortOrder).ToArray();
 
     private async void PageSelectionChanged(object sender, System.Windows.Controls.SelectionChangedEventArgs e)
@@ -139,6 +158,9 @@ public partial class MainWindow : Window
         }
         await using var repository = await SqliteProjectRepository.CreateAsync(_projectDirectory, CancellationToken.None);
         var textState = await repository.LoadPageTextStateAsync(selected.Id, CancellationToken.None);
+        var crop = selected.Crop ?? NormalizedCrop.Full;
+        CropTopPercent.Text = (crop.Top * 100).ToString("0.##", CultureInfo.CurrentCulture);
+        CropBottomPercent.Text = ((1 - crop.Bottom) * 100).ToString("0.##", CultureInfo.CurrentCulture);
         var reconstruction = VerticalTextReconstruction.Reconstruct(textState.MachineWords, 20, 0.75);
         TextEditor.Text = textState.ManualText ?? reconstruction.Text;
         var source = new BitmapImage(new Uri(selected.SourcePath, UriKind.Absolute));

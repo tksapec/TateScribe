@@ -23,6 +23,11 @@
         <Button Padding="12,6" Margin="0,0,8,0" Click="RotatePageLeft">左へ90度</Button>
         <Button Padding="12,6" Click="RotatePageRight">右へ90度</Button>
       </StackPanel>
+      <StackPanel DockPanel.Dock="Bottom" Orientation="Horizontal" HorizontalAlignment="Center" Margin="0,0,0,8">
+        <TextBlock VerticalAlignment="Center">上部除外%</TextBlock><TextBox x:Name="CropTopPercent" Width="40" Margin="4,0" />
+        <TextBlock VerticalAlignment="Center">下部除外%</TextBlock><TextBox x:Name="CropBottomPercent" Width="40" Margin="4,0" />
+        <Button Padding="8,4" Click="ApplyCrop">切り抜きを適用</Button>
+      </StackPanel>
       <Button DockPanel.Dock="Bottom" Margin="0,0,0,8" Padding="12,6" Click="TogglePageUsage">使用／除外</Button>
       <ListBox x:Name="PageList" DisplayMemberPath="FileName" SelectionChanged="PageSelectionChanged" />
     </DockPanel>
