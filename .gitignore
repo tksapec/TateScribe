@@ -13,4 +13,5 @@ __pycache__/
 ocr-runtime/
 models/
 cache/
+**/.tatescribe-cache/
 testdata/

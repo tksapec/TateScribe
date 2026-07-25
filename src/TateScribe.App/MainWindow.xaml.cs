@@ -8,6 +8,8 @@ using TateScribe.Infrastructure.Export;
 using TateScribe.Infrastructure.Ocr;
 using TateScribe.Core.Ocr;
 using TateScribe.Core.Layout;
+using TateScribe.Core.Images;
+using TateScribe.Infrastructure.Images;
 using TateScribe.Infrastructure.Import;
 using TateScribe.Infrastructure.Storage;
 
@@ -189,11 +191,14 @@ public partial class MainWindow : Window
             CancelOcrButton.IsEnabled = true;
             await using var worker = new JsonLinesOcrWorker(python, workerScript);
             await using var repository = await SqliteProjectRepository.CreateAsync(projectDirectory, CancellationToken.None);
+            var preprocessor = new ScreenshotPreprocessor();
+            var cacheDirectory = Path.Combine(projectDirectory, ".tatescribe-cache");
             for (var index = 0; index < pages.Count; index++)
             {
                 var page = pages[index];
                 ReviewStatus.Text = $"OCR実行中: {index + 1}/{pages.Count} {page.FileName}";
-                var result = await worker.RecognizeAsync(new OcrRequest(Guid.NewGuid().ToString("N"), "paddle", page.SourcePath), _ocrCancellation.Token);
+                var prepared = await preprocessor.PrepareAsync(page.SourcePath, cacheDirectory, NormalizedCrop.Full, page.RotationDegrees, _ocrCancellation.Token);
+                var result = await worker.RecognizeAsync(new OcrRequest(Guid.NewGuid().ToString("N"), "paddle", prepared.CachePath), _ocrCancellation.Token);
                 await repository.ReplaceOcrWordsAsync(page.Id, result.Engine, result.ModelVersion, result.Words, _ocrCancellation.Token);
                 if (PageList.SelectedItem is ProjectPage selected && selected.Id == page.Id)
                 {
