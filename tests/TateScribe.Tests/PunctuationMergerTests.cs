@@ -107,4 +107,36 @@ public sealed class PunctuationMergerTests
 
         Assert.Equal("成瀬は「島崎、わたしはシャボン玉を極めようと思うんだ」と言った", result);
     }
+
+    [Fact]
+    public void Merge_restores_a_paragraph_break_before_a_quote_from_the_auxiliary_ocr()
+    {
+        var result = PunctuationMerger.Merge("前文。引用文", "前文。\n「引用文」", 16);
+
+        Assert.Equal("前文。\n「引用文」", result);
+    }
+
+    [Fact]
+    public void Merge_replaces_a_misrecognized_kanji_with_a_katakana_and_long_vowel_pair()
+    {
+        var result = PunctuationMerger.Merge("西武大津店が才プンした", "西武大津店がオープンした", 16);
+
+        Assert.Equal("西武大津店がオープンした", result);
+    }
+
+    [Fact]
+    public void Merge_recovers_an_opening_quote_after_a_missing_comma_when_tesseract_returns_a_horizontal_stroke()
+    {
+        var result = PunctuationMerger.Merge("母はおり西武がなくなったら何もなくなっちゃうじゃんと言う", "母はおり、一西武かがなくなったら何もなくなっちゃうじゃん」と言う", 16);
+
+        Assert.Equal("母はおり、「西武がなくなったら何もなくなっちゃうじゃん」と言う", result);
+    }
+
+    [Fact]
+    public void Merge_ignores_an_ocr_middle_dot_between_a_question_mark_and_closing_quote()
+    {
+        var result = PunctuationMerger.Merge("別にいいけど録画しないの?", "[別にいいけど、録画しないの?・」", 16);
+
+        Assert.Equal("「別にいいけど、録画しないの?」", result);
+    }
 }

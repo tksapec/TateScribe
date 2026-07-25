@@ -88,7 +88,7 @@ def tesseract_response(request: dict) -> dict:
         [str(executable), str(image_path), "stdout", "--tessdata-dir", str(tessdata), "-l", "jpn_vert", "--psm", "5"],
         capture_output=True, text=True, encoding="utf-8", errors="replace", check=True,
     )
-    text = "".join(completed.stdout.split())
+    text = collapse_tesseract_paragraphs(completed.stdout)
     return {
         "protocolVersion": PROTOCOL_VERSION,
         "requestId": request["requestId"],
@@ -97,6 +97,21 @@ def tesseract_response(request: dict) -> dict:
         "modelVersion": "jpn_vert",
         "words": [{"text": text, "confidence": 0.8, "left": 0, "top": 0, "right": 1, "bottom": 1}],
     }
+
+
+def collapse_tesseract_paragraphs(text: str) -> str:
+    paragraphs = []
+    current_paragraph = []
+    for line in text.splitlines():
+        line = line.strip()
+        if line:
+            current_paragraph.append(line)
+        elif current_paragraph:
+            paragraphs.append("".join(current_paragraph))
+            current_paragraph = []
+    if current_paragraph:
+        paragraphs.append("".join(current_paragraph))
+    return "\n".join(paragraphs)
 
 
 def main() -> int:

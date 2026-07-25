@@ -4,42 +4,56 @@ namespace TateScribe.Core.Layout;
 
 public static class PunctuationMerger
 {
-    private const string PunctuationAndQuotes = "\u3001\u3002\uFF01\uFF1F\u300C\u300D\u300E\u300F\uFF08\uFF09\u2026\u30FC";
+    private const string PunctuationAndQuotes = "\u3001\u3002\uFF01\uFF1F\u300C\u300D\u300E\u300F\uFF08\uFF09\u2026\u30FC\n";
     private const int MaximumAlignmentCells = 4_000_000;
 
     public static string Merge(string primary, string auxiliary, int lookAhead)
     {
         if (string.IsNullOrEmpty(primary) || string.IsNullOrEmpty(auxiliary)) return primary;
         _ = lookAhead;
-        auxiliary = auxiliary.Replace('[', '\u300C').Replace(']', '\u300D');
+        auxiliary = auxiliary.Replace('[', '\u300C').Replace(']', '\u300D')
+            .Replace("?\u30FB\u300D", "?\u300D")
+            .Replace("\uFF1F\u30FB\u300D", "\uFF1F\u300D")
+            .Replace("\u3002\u30FB\u300D", "\u3002\u300D");
         var matches = FindLongestCommonSubsequence(primary, auxiliary);
         if (matches.Count == 0) return primary;
         var insertions = new Dictionary<int, StringBuilder>();
+        var replacements = new Dictionary<int, string>();
         var previousPrimaryIndex = -1;
         var previousAuxiliaryIndex = -1;
         for (var matchIndex = 0; matchIndex < matches.Count; matchIndex++)
         {
             var (primaryIndex, auxiliaryIndex) = matches[matchIndex];
-            AddSupplementaryGap(primary, auxiliary, previousPrimaryIndex + 1, primaryIndex, previousAuxiliaryIndex + 1, auxiliaryIndex, insertions, HasReliableContext(primary, auxiliary, matches, matchIndex - 1, matchIndex));
+            AddSupplementaryGap(primary, auxiliary, previousPrimaryIndex + 1, primaryIndex, previousAuxiliaryIndex + 1, auxiliaryIndex, insertions, replacements, HasReliableContext(primary, auxiliary, matches, matchIndex - 1, matchIndex));
             previousPrimaryIndex = primaryIndex;
             previousAuxiliaryIndex = auxiliaryIndex;
         }
-        AddSupplementaryGap(primary, auxiliary, previousPrimaryIndex + 1, primary.Length, previousAuxiliaryIndex + 1, auxiliary.Length, insertions, HasReliableContext(primary, auxiliary, matches, matches.Count - 1, matches.Count));
+        AddSupplementaryGap(primary, auxiliary, previousPrimaryIndex + 1, primary.Length, previousAuxiliaryIndex + 1, auxiliary.Length, insertions, replacements, HasReliableContext(primary, auxiliary, matches, matches.Count - 1, matches.Count));
 
         var result = new StringBuilder(primary.Length + insertions.Sum(pair => pair.Value.Length));
         for (var index = 0; index <= primary.Length; index++)
         {
             if (insertions.TryGetValue(index, out var punctuation)) result.Append(punctuation);
+            if (replacements.TryGetValue(index, out var replacement))
+            {
+                result.Append(replacement);
+                continue;
+            }
             if (index < primary.Length) result.Append(primary[index]);
         }
         return result.ToString();
     }
 
-    private static void AddSupplementaryGap(string primary, string auxiliary, int primaryStart, int primaryEnd, int auxiliaryStart, int auxiliaryEnd, Dictionary<int, StringBuilder> insertions, bool hasReliableContext)
+    private static void AddSupplementaryGap(string primary, string auxiliary, int primaryStart, int primaryEnd, int auxiliaryStart, int auxiliaryEnd, Dictionary<int, StringBuilder> insertions, Dictionary<int, string> replacements, bool hasReliableContext)
     {
         var primaryGap = primary.AsSpan(primaryStart, primaryEnd - primaryStart);
         var auxiliaryGap = auxiliary.AsSpan(auxiliaryStart, auxiliaryEnd - auxiliaryStart);
         if (!hasReliableContext || auxiliaryGap.IsEmpty) return;
+        if (IsKatakanaLongVowelReplacement(primaryGap, auxiliaryGap))
+        {
+            replacements[primaryStart] = auxiliaryGap.ToString();
+            return;
+        }
         if (ContainsOnlyWhitespace(primaryGap) && ContainsOnlySupplementaryCharacters(auxiliaryGap))
         {
             AddInsertion(insertions, primaryStart, auxiliaryGap);
@@ -48,6 +62,17 @@ public static class PunctuationMerger
 
         if (ContainsOnlyWhitespace(primaryGap) && auxiliaryGap.Length == 1 && auxiliaryGap[0] == '\u4E00' && HasClosingQuoteAhead(auxiliary, auxiliaryEnd))
         {
+            AddInsertion(insertions, primaryStart, "\u300C".AsSpan());
+            return;
+        }
+
+        if (ContainsOnlyWhitespace(primaryGap)
+            && auxiliaryGap.Length > 1
+            && auxiliaryGap[^1] == '\u4E00'
+            && ContainsOnlySupplementaryCharacters(auxiliaryGap[..^1])
+            && HasClosingQuoteAhead(auxiliary, auxiliaryEnd))
+        {
+            AddInsertion(insertions, primaryStart, auxiliaryGap[..^1]);
             AddInsertion(insertions, primaryStart, "\u300C".AsSpan());
             return;
         }
@@ -77,6 +102,17 @@ public static class PunctuationMerger
             if (character is not ('\u300C' or '\u300E' or '\uFF08')) return false;
         return true;
     }
+
+    private static bool IsKatakanaLongVowelReplacement(ReadOnlySpan<char> primary, ReadOnlySpan<char> auxiliary) =>
+        primary.Length == 1
+        && auxiliary.Length == 2
+        && IsCjkIdeograph(primary[0])
+        && auxiliary[0] is >= '\u30A1' and <= '\u30FA'
+        && auxiliary[1] == '\u30FC';
+
+    private static bool IsCjkIdeograph(char character) =>
+        character is >= '\u3400' and <= '\u4DBF'
+        || character is >= '\u4E00' and <= '\u9FFF';
 
     private static bool HasClosingQuoteAhead(string text, int startIndex)
     {
