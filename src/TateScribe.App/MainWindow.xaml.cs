@@ -2,6 +2,8 @@ using Microsoft.Win32;
 using System.IO;
 using System.Windows;
 using TateScribe.Core.Projects;
+using TateScribe.Core.Export;
+using TateScribe.Infrastructure.Export;
 using TateScribe.Infrastructure.Import;
 using TateScribe.Infrastructure.Storage;
 
@@ -93,5 +95,39 @@ public partial class MainWindow : Window
         if (_projectDirectory is null || PageList.SelectedItem is not ProjectPage selected) return;
         await using var repository = await SqliteProjectRepository.CreateAsync(_projectDirectory, CancellationToken.None);
         await repository.SaveManualTextAsync(selected.Id, TextEditor.Text, CancellationToken.None);
+    }
+
+    private async void ExportDocx(object sender, RoutedEventArgs e)
+    {
+        if (_projectDirectory is null || _pages.Count == 0) return;
+        var dialog = new SaveFileDialog
+        {
+            Filter = "Word 文書|*.docx",
+            FileName = "TateScribe.docx",
+            InitialDirectory = _projectDirectory
+        };
+        if (dialog.ShowDialog(this) != true) return;
+        try
+        {
+            IsEnabled = false;
+            await using var repository = await SqliteProjectRepository.CreateAsync(_projectDirectory, CancellationToken.None);
+            var blocks = new List<ExportParagraph>();
+            foreach (var page in _pages.Where(page => page.IsIncluded).OrderBy(page => page.SortOrder))
+            {
+                var state = await repository.LoadPageTextStateAsync(page.Id, CancellationToken.None);
+                var text = state.ManualText ?? string.Concat(state.MachineWords.Select(word => word.Text));
+                if (!string.IsNullOrWhiteSpace(text)) blocks.Add(new ExportParagraph(ExportStyle.Normal, text));
+            }
+            await new OpenXmlDocumentExporter().ExportAsync(new ExportDocument(blocks), dialog.FileName, CancellationToken.None);
+            MessageBox.Show(this, "DOCXを出力しました。", "TateScribe", MessageBoxButton.OK, MessageBoxImage.Information);
+        }
+        catch (Exception exception)
+        {
+            MessageBox.Show(this, exception.Message, "DOCX出力に失敗しました", MessageBoxButton.OK, MessageBoxImage.Error);
+        }
+        finally
+        {
+            IsEnabled = true;
+        }
     }
 }
