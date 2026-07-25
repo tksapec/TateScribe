@@ -1,6 +1,7 @@
 using Microsoft.Win32;
 using System.IO;
 using System.Windows;
+using System.Windows.Media.Imaging;
 using TateScribe.Core.Projects;
 using TateScribe.Core.Export;
 using TateScribe.Infrastructure.Export;
@@ -113,6 +114,7 @@ public partial class MainWindow : Window
         var textState = await repository.LoadPageTextStateAsync(selected.Id, CancellationToken.None);
         var reconstruction = VerticalTextReconstruction.Reconstruct(textState.MachineWords, 20, 0.75);
         TextEditor.Text = textState.ManualText ?? reconstruction.Text;
+        PagePreview.Source = new BitmapImage(new Uri(selected.SourcePath, UriKind.Absolute));
         ReviewStatus.Text = reconstruction.ReviewItems.Count == 0
             ? "要確認の低信頼度文字はありません。"
             : $"要確認: 低信頼度文字 {reconstruction.ReviewItems.Count} 件";
