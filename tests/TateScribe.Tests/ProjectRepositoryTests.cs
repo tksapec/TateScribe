@@ -60,7 +60,7 @@ public sealed class ProjectRepositoryTests : IDisposable
     public async Task Opening_an_old_project_schema_adds_crop_columns()
     {
         Directory.CreateDirectory(_directory);
-        await using (var connection = new SqliteConnection($"Data Source={Path.Combine(_directory, "project.db")}"))
+        await using (var connection = new SqliteConnection($"Data Source={Path.Combine(_directory, "project.db")};Pooling=False"))
         {
             await connection.OpenAsync();
             var command = connection.CreateCommand();
