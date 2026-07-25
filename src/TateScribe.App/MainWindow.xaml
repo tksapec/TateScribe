@@ -31,6 +31,7 @@
           <TextBox x:Name="CropBottomPercent" Width="42" Margin="3,0,0,0" />
         </StackPanel>
         <Button Width="144" HorizontalAlignment="Center" Margin="0,6,0,0" Padding="8,4" Click="ApplyCrop">切り抜きを適用</Button>
+        <Button Width="144" HorizontalAlignment="Center" Margin="0,4,0,0" Padding="8,4" Click="ApplyCropToAll">全ページに適用</Button>
       </StackPanel>
       <Button DockPanel.Dock="Bottom" Margin="0,0,0,8" Padding="12,6" Click="TogglePageUsage">使用／除外</Button>
       <ListBox x:Name="PageList" DisplayMemberPath="FileName" SelectionChanged="PageSelectionChanged" />
@@ -55,9 +56,24 @@
             <ColumnDefinition Width="*" />
           </Grid.ColumnDefinitions>
           <Border BorderBrush="LightGray" BorderThickness="1" Padding="4">
-            <ScrollViewer HorizontalScrollBarVisibility="Auto" VerticalScrollBarVisibility="Auto">
-              <Image x:Name="PagePreview" Stretch="Uniform" />
-            </ScrollViewer>
+            <DockPanel>
+              <StackPanel DockPanel.Dock="Top" Orientation="Horizontal" HorizontalAlignment="Center" Margin="0,0,0,6">
+                <Button Padding="8,3" Click="ZoomOut">縮小</Button>
+                <Button Padding="8,3" Margin="4,0" Click="ZoomActual">100%</Button>
+                <Button Padding="8,3" Click="ZoomIn">拡大</Button>
+              </StackPanel>
+              <ScrollViewer HorizontalScrollBarVisibility="Auto" VerticalScrollBarVisibility="Auto">
+                <Grid>
+                  <Image x:Name="PagePreview" Stretch="Fill" SizeChanged="PreviewSizeChanged" />
+                  <Canvas x:Name="CropOverlay" IsHitTestVisible="False">
+                    <Border x:Name="TopCropOverlay" Background="#66000000" HorizontalAlignment="Stretch" />
+                    <Border x:Name="BottomCropOverlay" Background="#66000000" HorizontalAlignment="Stretch" Canvas.Bottom="0" />
+                    <TextBlock x:Name="TopCropLabel" Foreground="White" Margin="6,4" />
+                    <TextBlock x:Name="BottomCropLabel" Foreground="White" Canvas.Bottom="4" Margin="6,0" />
+                  </Canvas>
+                </Grid>
+              </ScrollViewer>
+            </DockPanel>
           </Border>
           <TextBox x:Name="TextEditor" Grid.Column="2" AcceptsReturn="True" TextWrapping="Wrap" VerticalScrollBarVisibility="Auto" FontSize="16" />
         </Grid>

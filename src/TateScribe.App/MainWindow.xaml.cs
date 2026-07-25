@@ -21,6 +21,7 @@ public partial class MainWindow : Window
     private string? _projectDirectory;
     private List<ProjectPage> _pages = [];
     private CancellationTokenSource? _ocrCancellation;
+    private double _previewZoom = 1;
 
     public MainWindow()
     {
@@ -129,19 +130,36 @@ public partial class MainWindow : Window
     private async void ApplyCrop(object sender, RoutedEventArgs e)
     {
         if (_projectDirectory is null || PageList.SelectedItem is not ProjectPage selected) return;
-        if (!double.TryParse(CropTopPercent.Text, NumberStyles.Number, CultureInfo.CurrentCulture, out var topPercent) ||
-            !double.TryParse(CropBottomPercent.Text, NumberStyles.Number, CultureInfo.CurrentCulture, out var bottomPercent) ||
-            topPercent < 0 || bottomPercent < 0 || topPercent + bottomPercent >= 100)
+        if (!TryReadCrop(out var crop))
         {
             MessageBox.Show(this, "上部・下部の除外率は合計100%未満の数値で指定してください。", "TateScribe", MessageBoxButton.OK, MessageBoxImage.Warning);
             return;
         }
-        var crop = new NormalizedCrop(0, topPercent / 100, 1, 1 - bottomPercent / 100);
         _pages = _pages.Select(page => page.Id == selected.Id ? page with { Crop = crop } : page).ToList();
         await using var repository = await SqliteProjectRepository.CreateAsync(_projectDirectory, CancellationToken.None);
         await repository.SavePagesAsync(_pages, CancellationToken.None);
         RefreshPages();
         PageList.SelectedItem = _pages.Single(page => page.Id == selected.Id);
+    }
+
+    private async void ApplyCropToAll(object sender, RoutedEventArgs e)
+    {
+        if (_projectDirectory is null || !TryReadCrop(out var crop)) return;
+        _pages = _pages.Select(page => page with { Crop = crop }).ToList();
+        await using var repository = await SqliteProjectRepository.CreateAsync(_projectDirectory, CancellationToken.None);
+        await repository.SavePagesAsync(_pages, CancellationToken.None);
+        RefreshPages();
+        UpdateCropOverlay(crop);
+    }
+
+    private bool TryReadCrop(out NormalizedCrop crop)
+    {
+        crop = NormalizedCrop.Full;
+        if (!double.TryParse(CropTopPercent.Text, NumberStyles.Number, CultureInfo.CurrentCulture, out var topPercent) ||
+            !double.TryParse(CropBottomPercent.Text, NumberStyles.Number, CultureInfo.CurrentCulture, out var bottomPercent) ||
+            topPercent < 0 || bottomPercent < 0 || topPercent + bottomPercent >= 100) return false;
+        crop = new NormalizedCrop(0, topPercent / 100, 1, 1 - bottomPercent / 100);
+        return true;
     }
 
     private void RefreshPages() => PageList.ItemsSource = _pages.OrderBy(page => page.SortOrder).ToArray();
@@ -167,6 +185,9 @@ public partial class MainWindow : Window
         PagePreview.Source = selected.RotationDegrees == 0
             ? source
             : new TransformedBitmap(source, new System.Windows.Media.RotateTransform(selected.RotationDegrees));
+        _previewZoom = 1;
+        ApplyPreviewZoom();
+        UpdateCropOverlay(crop);
         ReviewStatus.Text = reconstruction.ReviewItems.Count == 0
             ? "要確認の低信頼度文字はありません。"
             : $"要確認: 低信頼度文字 {reconstruction.ReviewItems.Count} 件";
@@ -177,6 +198,30 @@ public partial class MainWindow : Window
         if (_projectDirectory is null || PageList.SelectedItem is not ProjectPage selected) return;
         await using var repository = await SqliteProjectRepository.CreateAsync(_projectDirectory, CancellationToken.None);
         await repository.SaveManualTextAsync(selected.Id, TextEditor.Text, CancellationToken.None);
+    }
+
+    private void ZoomIn(object sender, RoutedEventArgs e) { _previewZoom = Math.Min(4, _previewZoom * 1.25); ApplyPreviewZoom(); }
+    private void ZoomOut(object sender, RoutedEventArgs e) { _previewZoom = Math.Max(.25, _previewZoom / 1.25); ApplyPreviewZoom(); }
+    private void ZoomActual(object sender, RoutedEventArgs e) { _previewZoom = 1; ApplyPreviewZoom(); }
+    private void PreviewSizeChanged(object sender, SizeChangedEventArgs e) => UpdateCropOverlay(PageList.SelectedItem is ProjectPage page ? page.Crop ?? NormalizedCrop.Full : NormalizedCrop.Full);
+
+    private void ApplyPreviewZoom()
+    {
+        if (PagePreview.Source is not BitmapSource source) return;
+        PagePreview.Width = source.PixelWidth * _previewZoom;
+        PagePreview.Height = source.PixelHeight * _previewZoom;
+    }
+
+    private void UpdateCropOverlay(NormalizedCrop crop)
+    {
+        CropOverlay.Width = PagePreview.ActualWidth;
+        CropOverlay.Height = PagePreview.ActualHeight;
+        TopCropOverlay.Width = CropOverlay.Width;
+        BottomCropOverlay.Width = CropOverlay.Width;
+        TopCropOverlay.Height = CropOverlay.Height * crop.Top;
+        BottomCropOverlay.Height = CropOverlay.Height * (1 - crop.Bottom);
+        TopCropLabel.Text = crop.Top > 0 ? $"上部除外 {crop.Top:P0}" : string.Empty;
+        BottomCropLabel.Text = crop.Bottom < 1 ? $"下部除外 {1 - crop.Bottom:P0}" : string.Empty;
     }
 
     private async void ExportDocx(object sender, RoutedEventArgs e)
