@@ -79,4 +79,19 @@ public partial class MainWindow : Window
     }
 
     private void RefreshPages() => PageList.ItemsSource = _pages.OrderBy(page => page.SortOrder).ToArray();
+
+    private async void PageSelectionChanged(object sender, System.Windows.Controls.SelectionChangedEventArgs e)
+    {
+        if (_projectDirectory is null || PageList.SelectedItem is not ProjectPage selected) return;
+        await using var repository = await SqliteProjectRepository.CreateAsync(_projectDirectory, CancellationToken.None);
+        var textState = await repository.LoadPageTextStateAsync(selected.Id, CancellationToken.None);
+        TextEditor.Text = textState.ManualText ?? string.Concat(textState.MachineWords.Select(word => word.Text));
+    }
+
+    private async void SaveManualText(object sender, RoutedEventArgs e)
+    {
+        if (_projectDirectory is null || PageList.SelectedItem is not ProjectPage selected) return;
+        await using var repository = await SqliteProjectRepository.CreateAsync(_projectDirectory, CancellationToken.None);
+        await repository.SaveManualTextAsync(selected.Id, TextEditor.Text, CancellationToken.None);
+    }
 }

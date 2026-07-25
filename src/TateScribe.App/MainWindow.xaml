@@ -15,13 +15,21 @@
         <Button Padding="12,6" Margin="0,0,8,0" Click="MovePageUp">上へ</Button>
         <Button Padding="12,6" Click="MovePageDown">下へ</Button>
       </StackPanel>
-      <ListBox x:Name="PageList" DisplayMemberPath="FileName" />
+      <ListBox x:Name="PageList" DisplayMemberPath="FileName" SelectionChanged="PageSelectionChanged" />
     </DockPanel>
     <Border Grid.Column="2" BorderBrush="Gray" BorderThickness="1" CornerRadius="4" Padding="24">
-      <StackPanel VerticalAlignment="Center" HorizontalAlignment="Center">
-        <TextBlock FontSize="28" HorizontalAlignment="Center">TateScribe</TextBlock>
-        <TextBlock Margin="0,12,0,0" TextAlignment="Center" TextWrapping="Wrap">縦書き電子書籍スクリーンショットを取り込み、OCR証跡を保持したまま編集可能なDOCXへ出力します。OCRモデルはローカルのワーカー設定後に実行できます。</TextBlock>
-      </StackPanel>
+      <Grid>
+        <Grid.RowDefinitions>
+          <RowDefinition Height="Auto" />
+          <RowDefinition Height="Auto" />
+          <RowDefinition Height="*" />
+          <RowDefinition Height="Auto" />
+        </Grid.RowDefinitions>
+        <TextBlock FontSize="28">TateScribe</TextBlock>
+        <TextBlock Grid.Row="1" Margin="0,12,0,12" TextWrapping="Wrap">OCR根拠を保持した本文編集。低信頼度文字は確定せず、確認後に保存してください。</TextBlock>
+        <TextBox x:Name="TextEditor" Grid.Row="2" AcceptsReturn="True" TextWrapping="Wrap" VerticalScrollBarVisibility="Auto" FontSize="16" />
+        <Button Grid.Row="3" HorizontalAlignment="Right" Margin="0,12,0,0" Padding="12,6" Click="SaveManualText">手動修正を保存</Button>
+      </Grid>
     </Border>
   </Grid>
 </Window>
