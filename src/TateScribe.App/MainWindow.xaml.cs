@@ -122,15 +122,15 @@ public partial class MainWindow : Window
         {
             IsEnabled = false;
             await using var repository = await SqliteProjectRepository.CreateAsync(_projectDirectory, CancellationToken.None);
-            var blocks = new List<ExportParagraph>();
+            var pageTexts = new List<string>();
             foreach (var page in _pages.Where(page => page.IsIncluded).OrderBy(page => page.SortOrder))
             {
                 var state = await repository.LoadPageTextStateAsync(page.Id, CancellationToken.None);
                 var text = state.ManualText ?? VerticalTextReconstruction.Reconstruct(state.MachineWords, 20, 0.75).Text;
-                if (!string.IsNullOrWhiteSpace(text)) blocks.Add(new ExportParagraph(ExportStyle.Normal, text));
+                if (!string.IsNullOrWhiteSpace(text)) pageTexts.Add(text);
             }
             var outputPath = BookFolderPaths.GetDocumentPath(_projectDirectory);
-            await new OpenXmlDocumentExporter().ExportAsync(new ExportDocument(blocks), outputPath, CancellationToken.None);
+            await new OpenXmlDocumentExporter().ExportAsync(BookDocumentAssembler.Assemble(pageTexts), outputPath, CancellationToken.None);
             MessageBox.Show(this, $"DOCXを出力しました。{Environment.NewLine}{outputPath}", "TateScribe", MessageBoxButton.OK, MessageBoxImage.Information);
         }
         catch (Exception exception)
