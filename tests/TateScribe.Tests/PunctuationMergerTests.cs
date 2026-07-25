@@ -139,4 +139,20 @@ public sealed class PunctuationMergerTests
 
         Assert.Equal("「別にいいけど、録画しないの?」", result);
     }
+
+    [Fact]
+    public void Merge_repairs_quoted_search_terms_when_auxiliary_ocr_misreads_a_quote_boundary()
+    {
+        var result = PunctuationMerger.Merge("ぐるりんワイドびわテレ西武ライオンズといっためぼしいワード", "「ぐるりんワイド]」「びわテレー]」「西武」テライオンズ」といっためぼしいワード", 16);
+
+        Assert.Equal("「ぐるりんワイド」」「びわテレ」「西武」「ライオンズ」といっためぼしいワード", result);
+    }
+
+    [Fact]
+    public void Merge_recovers_an_unmatched_quote_around_a_katakana_title_after_niyoru()
+    {
+        var result = PunctuationMerger.Merge("幸運の女神によるサマジンボ宝くじを買いましうのPR", "幸運の女神によるサマージャンボ宝くじを買いましょう」]」のPR", 16);
+
+        Assert.Equal("幸運の女神による「サマージャンボ宝くじを買いましょう」のPR", result);
+    }
 }

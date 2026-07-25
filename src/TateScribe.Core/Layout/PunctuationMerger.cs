@@ -41,7 +41,7 @@ public static class PunctuationMerger
             }
             if (index < primary.Length) result.Append(primary[index]);
         }
-        return result.ToString();
+        return RecoverQuotedKatakanaTitleAfterNiyoru(result.ToString());
     }
 
     private static void AddSupplementaryGap(string primary, string auxiliary, int primaryStart, int primaryEnd, int auxiliaryStart, int auxiliaryEnd, Dictionary<int, StringBuilder> insertions, Dictionary<int, string> replacements, bool hasReliableContext)
@@ -54,9 +54,31 @@ public static class PunctuationMerger
             replacements[primaryStart] = auxiliaryGap.ToString();
             return;
         }
+        if (ContainsOnlyWhitespace(primaryGap)
+            && auxiliaryGap.Length > 1
+            && auxiliaryGap[0] == '\u30FC'
+            && auxiliaryGap[1] == '\u300D'
+            && IsMixedScriptQuotedTerm(auxiliary, auxiliaryStart))
+        {
+            if (auxiliaryGap.Length >= 4 && auxiliaryGap[2] == '\u300D' && auxiliaryGap[3] == '\u300C')
+                AddInsertion(insertions, primaryStart, "\u300D\u300C".AsSpan());
+            else
+                AddInsertion(insertions, primaryStart, auxiliaryGap[1..]);
+            return;
+        }
         if (ContainsOnlyWhitespace(primaryGap) && ContainsOnlySupplementaryCharacters(auxiliaryGap))
         {
             AddInsertion(insertions, primaryStart, auxiliaryGap);
+            return;
+        }
+
+        if (ContainsOnlyWhitespace(primaryGap)
+            && auxiliaryGap.Length == 2
+            && auxiliaryGap[0] == '\u300D'
+            && IsKatakana(auxiliaryGap[1])
+            && HasClosingQuoteAhead(auxiliary, auxiliaryEnd))
+        {
+            AddInsertion(insertions, primaryStart, "\u300D\u300C".AsSpan());
             return;
         }
 
@@ -113,6 +135,42 @@ public static class PunctuationMerger
     private static bool IsCjkIdeograph(char character) =>
         character is >= '\u3400' and <= '\u4DBF'
         || character is >= '\u4E00' and <= '\u9FFF';
+
+    private static bool IsKatakana(char character) => character is >= '\u30A1' and <= '\u30FA';
+
+    private static bool IsMixedScriptQuotedTerm(string text, int termEnd)
+    {
+        var openingQuote = text.LastIndexOf('\u300C', termEnd - 1);
+        if (openingQuote < 0) return false;
+        var term = text.AsSpan(openingQuote + 1, termEnd - openingQuote - 1);
+        var hasHiragana = false;
+        var hasKatakana = false;
+        foreach (var character in term)
+        {
+            hasHiragana |= character is >= '\u3041' and <= '\u3096';
+            hasKatakana |= IsKatakana(character);
+        }
+        return hasHiragana && hasKatakana;
+    }
+
+    private static string RecoverQuotedKatakanaTitleAfterNiyoru(string text)
+    {
+        var closingQuoteRun = text.IndexOf("\u300D\u300D\u300D", StringComparison.Ordinal);
+        if (closingQuoteRun < 0) return text;
+        var introducer = text.LastIndexOf("\u306B\u3088\u308B", closingQuoteRun, StringComparison.Ordinal);
+        if (introducer < 0) return text;
+        var titleStart = introducer + "\u306B\u3088\u308B".Length;
+        if (titleStart >= closingQuoteRun || !IsKatakana(text[titleStart])) return text;
+        if (text.AsSpan(titleStart, closingQuoteRun - titleStart).Contains('\u300C')) return text;
+
+        var repaired = new StringBuilder(text.Length - 1);
+        repaired.Append(text, 0, titleStart);
+        repaired.Append('\u300C');
+        repaired.Append(text, titleStart, closingQuoteRun - titleStart);
+        repaired.Append('\u300D');
+        repaired.Append(text, closingQuoteRun + 3, text.Length - closingQuoteRun - 3);
+        return repaired.ToString();
+    }
 
     private static bool HasClosingQuoteAhead(string text, int startIndex)
     {
