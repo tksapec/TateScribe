@@ -17,6 +17,7 @@ public partial class MainWindow : Window
 {
     private string? _projectDirectory;
     private List<ProjectPage> _pages = [];
+    private CancellationTokenSource? _ocrCancellation;
 
     public MainWindow()
     {
@@ -159,6 +160,7 @@ public partial class MainWindow : Window
     private async void RunOcr(object sender, RoutedEventArgs e)
     {
         if (_projectDirectory is null || PageList.SelectedItem is not ProjectPage selected) return;
+        if (_ocrCancellation is not null) return;
         var python = ResolveRuntimePath("ocr-runtime", "Scripts", "python.exe");
         var workerScript = ResolveRuntimePath("ocr-worker", "worker.py");
         if (!File.Exists(python) || !File.Exists(workerScript))
@@ -168,9 +170,11 @@ public partial class MainWindow : Window
         }
         try
         {
-            IsEnabled = false;
+            _ocrCancellation = new CancellationTokenSource();
+            RunOcrButton.IsEnabled = false;
+            CancelOcrButton.IsEnabled = true;
             await using var worker = new JsonLinesOcrWorker(python, workerScript);
-            var result = await worker.RecognizeAsync(new OcrRequest(Guid.NewGuid().ToString("N"), "paddle", selected.SourcePath), CancellationToken.None);
+            var result = await worker.RecognizeAsync(new OcrRequest(Guid.NewGuid().ToString("N"), "paddle", selected.SourcePath), _ocrCancellation.Token);
             await using var repository = await SqliteProjectRepository.CreateAsync(_projectDirectory, CancellationToken.None);
             await repository.ReplaceOcrWordsAsync(selected.Id, result.Engine, result.ModelVersion, result.Words, CancellationToken.None);
             var reconstruction = VerticalTextReconstruction.Reconstruct(result.Words, 20, 0.75);
@@ -183,11 +187,20 @@ public partial class MainWindow : Window
         {
             MessageBox.Show(this, exception.Message, "OCRを実行できません", MessageBoxButton.OK, MessageBoxImage.Error);
         }
+        catch (OperationCanceledException)
+        {
+            ReviewStatus.Text = "OCRを中止しました。完了済みのOCR結果は保持されています。";
+        }
         finally
         {
-            IsEnabled = true;
+            _ocrCancellation?.Dispose();
+            _ocrCancellation = null;
+            RunOcrButton.IsEnabled = true;
+            CancelOcrButton.IsEnabled = false;
         }
     }
+
+    private void CancelOcr(object sender, RoutedEventArgs e) => _ocrCancellation?.Cancel();
 
     private static string ResolveRuntimePath(params string[] parts)
     {
