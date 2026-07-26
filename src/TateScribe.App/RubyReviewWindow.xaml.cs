@@ -9,6 +9,7 @@ public partial class RubyReviewWindow : Window
 {
     private readonly RubyImportResultSource source;
     private readonly Action<string>? showPage;
+    private readonly Func<RubyImportDocument, RubyImportPreview>? validateReviewed;
     private readonly IReadOnlyList<RubyOcrCandidate> ocrCandidates;
     private readonly ObservableCollection<RubyAnnotationView> annotations;
 
@@ -16,29 +17,41 @@ public partial class RubyReviewWindow : Window
         StructuredDocument document,
         RubyImportPreview preview,
         IReadOnlyList<RubyOcrCandidate>? ocrCandidates = null,
-        Action<string>? showPage = null)
+        Action<string>? showPage = null,
+        Func<RubyImportDocument, RubyImportPreview>? validateReviewed = null)
     {
         InitializeComponent();
         if (preview.Result is null) throw new ArgumentException("ルビ候補がありません。", nameof(preview));
         source = new RubyImportResultSource(document, preview.Result, preview.Issues);
         this.ocrCandidates = ocrCandidates ?? [];
         this.showPage = showPage;
+        this.validateReviewed = validateReviewed;
         var readings = preview.Result.Annotations
             .GroupBy(item => item.BaseText, StringComparer.Ordinal)
             .ToDictionary(group => group.Key,
                 group => group.Select(item => item.Reading).Distinct(StringComparer.Ordinal).ToArray(),
                 StringComparer.Ordinal);
         annotations = new ObservableCollection<RubyAnnotationView>(preview.Result.Annotations.Select(item =>
-            new RubyAnnotationView(
+        {
+            var candidateIssues = preview.Issues
+                .Where(issue => RubyBulkConfirmationPolicy.Matches(issue, item))
+                .ToArray();
+            var readingSummary = readings[item.BaseText].Length > 1
+                ? $"同じ表記の読み: {string.Join(" / ", readings[item.BaseText])}"
+                : $"同じ表記の読み: {readings[item.BaseText][0]}";
+            var warning = string.Join(
+                Environment.NewLine,
+                candidateIssues.Select(issue => issue.Message).Prepend(readingSummary));
+            return new RubyAnnotationView(
                 item,
-                readings[item.BaseText].Length > 1
-                    ? $"同じ表記の読み: {string.Join(" / ", readings[item.BaseText])}"
-                    : $"同じ表記の読み: {readings[item.BaseText][0]}",
+                warning,
+                candidateIssues,
                 document.Paragraphs.SingleOrDefault(paragraph =>
                     string.Equals(
                         paragraph.ParagraphId.ToString("D"),
                         item.ParagraphId,
-                        StringComparison.OrdinalIgnoreCase))?.PlainText ?? string.Empty)));
+                        StringComparison.OrdinalIgnoreCase))?.PlainText ?? string.Empty);
+        }));
         AnnotationGrid.ItemsSource = annotations;
         UnresolvedGrid.ItemsSource = preview.Result.Unresolved.Select(item => new
         {
@@ -72,9 +85,18 @@ public partial class RubyReviewWindow : Window
         }
         var coordinates = ocrCandidates.Where(candidate =>
                 selected.EvidencePageMarkers.Contains(candidate.PageMarker, StringComparer.Ordinal)
-                && string.Equals(candidate.OcrText, selected.BaseText, StringComparison.Ordinal))
+                && string.Equals(
+                    RubyTextNormalizer.NormalizeReading(candidate.ReadingCandidate),
+                    RubyTextNormalizer.NormalizeReading(selected.Reading),
+                    StringComparison.Ordinal)
+                && (candidate.BaseTextCandidate is null
+                    || string.Equals(
+                        candidate.BaseTextCandidate,
+                        selected.BaseText,
+                        StringComparison.Ordinal)))
+            .OrderByDescending(candidate => candidate.LinkConfidence ?? 0)
             .Select(candidate =>
-                $"OCR座標: {candidate.PageMarker} ({candidate.Left:0.##}, {candidate.Top:0.##})-({candidate.Right:0.##}, {candidate.Bottom:0.##}) 信頼度 {candidate.Confidence:0.00}");
+                $"OCR座標: {candidate.PageMarker} ({candidate.Left:0.##}, {candidate.Top:0.##})-({candidate.Right:0.##}, {candidate.Bottom:0.##}) OCR信頼度 {candidate.Confidence:0.00} リンク信頼度 {(candidate.LinkConfidence?.ToString("0.00") ?? "未特定")} 親文字候補 {candidate.BaseTextCandidate ?? "未特定"}");
         EvidenceText.Text = $"根拠: {selected.Evidence}{Environment.NewLine}ページ: {selected.PageMarkers}{Environment.NewLine}{string.Join(Environment.NewLine, coordinates)}{Environment.NewLine}{selected.Warning}";
     }
 
@@ -89,8 +111,21 @@ public partial class RubyReviewWindow : Window
 
     private void ConfirmSource(RubySource source)
     {
-        foreach (var item in annotations.Where(item => item.Source == source))
-            item.Status = RubyAnnotationStatus.Confirmed;
+        AnnotationGrid.CommitEdit(DataGridEditingUnit.Row, true);
+        var current = ReviewedDocument;
+        var validation = validateReviewed?.Invoke(current)
+            ?? new RubyImportPreview(current, annotations.SelectMany(item => item.Issues).ToArray());
+        if (!validation.IsValid) return;
+        foreach (var item in annotations)
+        {
+            var proposal = item.ToProposal();
+            var issues = validation.Issues
+                .Where(issue => RubyBulkConfirmationPolicy.Matches(issue, proposal))
+                .ToArray();
+            item.UpdateIssues(issues);
+            if (RubyBulkConfirmationPolicy.CanConfirm(proposal, source, issues))
+                item.Status = RubyAnnotationStatus.Confirmed;
+        }
         AnnotationGrid.Items.Refresh();
     }
 
@@ -141,6 +176,7 @@ public partial class RubyReviewWindow : Window
         public RubyAnnotationView(
             RubyAnnotationProposal original,
             string warning,
+            IReadOnlyList<RubyValidationIssue> issues,
             string paragraphText)
         {
             this.original = original;
@@ -155,6 +191,7 @@ public partial class RubyReviewWindow : Window
             Evidence = original.Evidence;
             Status = original.Status;
             Warning = warning;
+            Issues = issues;
         }
         public string ParagraphId { get; }
         public int Start { get; set; }
@@ -170,7 +207,13 @@ public partial class RubyReviewWindow : Window
         public string PageMarkers => string.Join(", ", EvidencePageMarkers);
         public string Evidence { get; }
         public RubyAnnotationStatus Status { get; set; }
-        public string Warning { get; }
+        public string Warning { get; private set; }
+        public IReadOnlyList<RubyValidationIssue> Issues { get; private set; }
+        public void UpdateIssues(IReadOnlyList<RubyValidationIssue> issues)
+        {
+            Issues = issues;
+            Warning = string.Join(Environment.NewLine, issues.Select(issue => issue.Message));
+        }
         public RubyAnnotationProposal ToProposal()
         {
             if (Start < 0 || Length < 1 || (long)Start + Length > paragraphText.Length)

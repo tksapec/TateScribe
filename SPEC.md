@@ -13,10 +13,14 @@ TateScribe is an offline Windows application that turns Japanese vertical-book s
 
 `RubyPolicy` is `PreserveOriginalOnly` by default. OCR `RubyCandidate` regions are evidence; imported proposals remain separate until the user confirms them. Only `Confirmed` annotations reach DOCX or Denden output. Body changes make the associated batch and annotations stale.
 
+`RubyOcrCandidate.ReadingCandidate` is the OCR text from the ruby region. `BaseTextCandidate` is a separate, optional parent-text hypothesis linked from vertically overlapping nearby Body regions. Reading comparison normalizes width, katakana/hiragana, and whitespace without dictionary guessing. An ambiguous coordinate link remains null and cannot be bulk-confirmed.
+
 The authoritative model is a `StructuredDocument` with stable persisted paragraph IDs, roles, ordered text/ruby inlines, text hashes, and source spans. Applying ruby must not change the plain body text.
 
 ## Output
 
 TateScribe generates schema-valid multi-ruby DOCX and deterministic Denden Converter folders. Denden text is UTF-8 without BOM with LF line endings and fixed ordering. EPUB generation is outside this phase.
+
+`ddconv.yml` follows version 1.0 with structured title/creator entries and official option names. Illustration output is opt-in, flat, ordered by page, and referenced from Markdown. PNG/JPEG/GIF are preserved, other decodable formats become PNG, images over 3 MiB and exports over 100 files are rejected before output creation. DOCX and Denden use the same preflight counts and never render Proposed, Unresolved, or Stale ruby.
 
 Compatibility with existing project databases, proofreading format 1/2, legacy `ExportDocument`, page roles, boundary joins, and existing OCR/manual/confirmed layers is required.

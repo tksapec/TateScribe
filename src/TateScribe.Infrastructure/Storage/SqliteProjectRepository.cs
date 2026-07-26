@@ -658,9 +658,11 @@ public sealed class SqliteProjectRepository : IAsyncDisposable
             insertCandidate.CommandText = """
                 INSERT INTO ruby_batch_candidates
                     (batch_id, page_marker, ocr_text, left_x, top_y, right_x, bottom_y,
-                     confidence, adjacent_body_text, ocr_run_id, returned_to_body, included_in_draft)
+                     confidence, adjacent_body_text, ocr_run_id, returned_to_body, included_in_draft,
+                     reading_candidate, base_text_candidate, link_confidence, candidate_version)
                 VALUES ($batchId, $marker, $text, $left, $top, $right, $bottom,
-                        $confidence, $adjacent, $runId, $returned, $included);
+                        $confidence, $adjacent, $runId, $returned, $included,
+                        $reading, $baseText, $linkConfidence, $candidateVersion);
                 """;
             insertCandidate.Parameters.AddWithValue("$batchId", batchId.ToString("D"));
             insertCandidate.Parameters.AddWithValue("$marker", candidate.PageMarker);
@@ -670,10 +672,18 @@ public sealed class SqliteProjectRepository : IAsyncDisposable
             insertCandidate.Parameters.AddWithValue("$right", candidate.Right);
             insertCandidate.Parameters.AddWithValue("$bottom", candidate.Bottom);
             insertCandidate.Parameters.AddWithValue("$confidence", candidate.Confidence);
-            insertCandidate.Parameters.AddWithValue("$adjacent", candidate.AdjacentBodyText);
+            insertCandidate.Parameters.AddWithValue("$adjacent", candidate.LegacyAdjacentBodyText);
             insertCandidate.Parameters.AddWithValue("$runId", candidate.OcrRunId.ToString("D"));
             insertCandidate.Parameters.AddWithValue("$returned", candidate.ReturnedToBody ? 1 : 0);
             insertCandidate.Parameters.AddWithValue("$included", candidate.IncludedInDraft ? 1 : 0);
+            insertCandidate.Parameters.AddWithValue("$reading", candidate.ReadingCandidate);
+            insertCandidate.Parameters.AddWithValue(
+                "$baseText",
+                (object?)candidate.BaseTextCandidate ?? DBNull.Value);
+            insertCandidate.Parameters.AddWithValue(
+                "$linkConfidence",
+                (object?)candidate.LinkConfidence ?? DBNull.Value);
+            insertCandidate.Parameters.AddWithValue("$candidateVersion", candidate.CandidateVersion);
             await insertCandidate.ExecuteNonQueryAsync(cancellationToken);
         }
         await transaction.CommitAsync(cancellationToken);
@@ -718,20 +728,30 @@ public sealed class SqliteProjectRepository : IAsyncDisposable
         var candidates = new List<RubyOcrCandidate>();
         var candidateCommand = _connection.CreateCommand();
         candidateCommand.CommandText = """
-            SELECT page_marker, ocr_text, left_x, top_y, right_x, bottom_y, confidence,
-                   adjacent_body_text, ocr_run_id, returned_to_body, included_in_draft
+            SELECT page_marker, COALESCE(reading_candidate, ocr_text), base_text_candidate,
+                   left_x, top_y, right_x, bottom_y, confidence,
+                   ocr_run_id, returned_to_body, included_in_draft,
+                   link_confidence, candidate_version, adjacent_body_text
             FROM ruby_batch_candidates WHERE batch_id = $id ORDER BY page_marker, rowid;
             """;
         candidateCommand.Parameters.AddWithValue("$id", batchId.ToString("D"));
         await using (var candidateReader = await candidateCommand.ExecuteReaderAsync(cancellationToken))
             while (await candidateReader.ReadAsync(cancellationToken))
                 candidates.Add(new RubyOcrCandidate(
-                    candidateReader.GetString(0), candidateReader.GetString(1),
-                    candidateReader.GetDouble(2), candidateReader.GetDouble(3),
-                    candidateReader.GetDouble(4), candidateReader.GetDouble(5),
-                    candidateReader.GetDouble(6), candidateReader.GetString(7),
-                    Guid.Parse(candidateReader.GetString(8)), candidateReader.GetInt32(9) != 0,
-                    candidateReader.GetInt32(10) != 0));
+                    candidateReader.GetString(0),
+                    candidateReader.GetString(1),
+                    candidateReader.IsDBNull(2) ? null : candidateReader.GetString(2),
+                    candidateReader.GetDouble(3),
+                    candidateReader.GetDouble(4),
+                    candidateReader.GetDouble(5),
+                    candidateReader.GetDouble(6),
+                    candidateReader.GetDouble(7),
+                    Guid.Parse(candidateReader.GetString(8)),
+                    candidateReader.GetInt32(9) != 0,
+                    candidateReader.GetInt32(10) != 0,
+                    candidateReader.IsDBNull(11) ? null : candidateReader.GetDouble(11),
+                    candidateReader.GetInt32(12),
+                    candidateReader.GetString(13)));
         return new RubyBatchSnapshot(batchId, policy, snapshotId, document, markers, pageIdsByMarker,
             confirmedTextStale, candidates);
     }
@@ -878,6 +898,54 @@ public sealed class SqliteProjectRepository : IAsyncDisposable
             """;
         command.Parameters.AddWithValue("$projectId", projectId.ToString("D"));
         return Guid.TryParse(await command.ExecuteScalarAsync(cancellationToken) as string, out var id) ? id : null;
+    }
+
+    public async Task<(int Confirmed, int Proposed, int Stale, int Unresolved)>
+        GetRubyPreflightCountsAsync(
+            Guid snapshotId,
+            CancellationToken cancellationToken)
+    {
+        var confirmed = 0;
+        var proposed = 0;
+        var stale = 0;
+        var annotations = _connection.CreateCommand();
+        annotations.CommandText = """
+            SELECT a.status, COUNT(*)
+            FROM ruby_annotations a
+            JOIN ruby_batches b ON b.id = a.batch_id
+            WHERE b.document_snapshot_id = $snapshotId
+            GROUP BY a.status;
+            """;
+        annotations.Parameters.AddWithValue("$snapshotId", snapshotId.ToString("D"));
+        await using (var reader = await annotations.ExecuteReaderAsync(cancellationToken))
+            while (await reader.ReadAsync(cancellationToken))
+            {
+                var count = reader.GetInt32(1);
+                switch (Enum.Parse<RubyAnnotationStatus>(reader.GetString(0)))
+                {
+                    case RubyAnnotationStatus.Confirmed:
+                        confirmed += count;
+                        break;
+                    case RubyAnnotationStatus.Proposed:
+                        proposed += count;
+                        break;
+                    case RubyAnnotationStatus.Stale:
+                        stale += count;
+                        break;
+                }
+            }
+        var unresolved = _connection.CreateCommand();
+        unresolved.CommandText = """
+            SELECT COUNT(*)
+            FROM ruby_unresolved_items u
+            JOIN ruby_batches b ON b.id = u.batch_id
+            WHERE b.document_snapshot_id = $snapshotId;
+            """;
+        unresolved.Parameters.AddWithValue("$snapshotId", snapshotId.ToString("D"));
+        var unresolvedCount = Convert.ToInt32(
+            await unresolved.ExecuteScalarAsync(cancellationToken),
+            CultureInfo.InvariantCulture);
+        return (confirmed, proposed, stale, unresolvedCount);
     }
 
     public async Task<IReadOnlyList<RubyAnnotationProposal>> LoadRubyAnnotationsAsync(
@@ -2449,6 +2517,40 @@ public sealed class SqliteProjectRepository : IAsyncDisposable
                     """, cancellationToken);
                 await BackfillAutomaticOcrRolesAsync(transaction, cancellationToken);
                 await SetSchemaVersionAsync(transaction, 8, cancellationToken);
+            }
+
+            if (currentVersion < 9)
+            {
+                await AddColumnIfMissingAsync(
+                    transaction,
+                    "ruby_batch_candidates",
+                    "reading_candidate",
+                    "TEXT",
+                    cancellationToken);
+                await AddColumnIfMissingAsync(
+                    transaction,
+                    "ruby_batch_candidates",
+                    "base_text_candidate",
+                    "TEXT",
+                    cancellationToken);
+                await AddColumnIfMissingAsync(
+                    transaction,
+                    "ruby_batch_candidates",
+                    "link_confidence",
+                    "REAL",
+                    cancellationToken);
+                await AddColumnIfMissingAsync(
+                    transaction,
+                    "ruby_batch_candidates",
+                    "candidate_version",
+                    "INTEGER NOT NULL DEFAULT 1",
+                    cancellationToken);
+                await ExecuteAsync(transaction, """
+                    UPDATE ruby_batch_candidates
+                    SET reading_candidate = ocr_text
+                    WHERE reading_candidate IS NULL;
+                    """, cancellationToken);
+                await SetSchemaVersionAsync(transaction, 9, cancellationToken);
             }
 
             var legacyMigration = _connection.CreateCommand();

@@ -1,4 +1,5 @@
 using System.IO;
+using TateScribe.Core.Denden;
 using TateScribe.Core.Export;
 using TateScribe.Core.Proofreading;
 using TateScribe.Core.Projects;
@@ -17,10 +18,56 @@ public sealed record DocumentExportPreparation(
 public sealed record StructuredDocumentPreparation(
     StructuredDocument Document,
     Guid SnapshotId,
-    DocumentExportPreparation LegacyPreparation);
+    DocumentExportPreparation LegacyPreparation,
+    ExportPreflightResult Preflight);
+
+public sealed record DendenDocumentPreparation(
+    DendenExportDocument Document,
+    Guid SnapshotId,
+    DocumentExportPreparation LegacyPreparation,
+    ExportPreflightResult Preflight);
 
 public sealed class DocumentExportService
 {
+    public async Task<DendenDocumentPreparation> PrepareDendenAsync(
+        string projectDirectory,
+        IReadOnlyList<ProjectPage> pages,
+        bool includeIllustrations,
+        CancellationToken cancellationToken)
+    {
+        var structured = await PrepareStructuredAsync(
+            projectDirectory, pages, false, cancellationToken);
+        var pageSortOrders = pages.ToDictionary(page => page.Id, page => page.SortOrder);
+        var illustrations = includeIllustrations
+            ? pages.Where(page => page.IsIncluded && page.PageRole == PageRole.Illustration)
+                .OrderBy(page => page.SortOrder)
+                .Select((page, index) => new DendenIllustration(
+                    page.Id,
+                    page.SortOrder,
+                    page.SourcePath,
+                    $"挿絵 {index + 1}"))
+                .ToArray()
+            : [];
+        var dendenDocument = DendenDocumentAssembler.Assemble(
+            structured.Document,
+            pageSortOrders,
+            illustrations);
+        return new DendenDocumentPreparation(
+            dendenDocument,
+            structured.SnapshotId,
+            structured.LegacyPreparation,
+            structured.Preflight with
+            {
+                IllustrationCount = illustrations.Length,
+                Issues = structured.Preflight.Issues.Concat(
+                    dendenDocument.Warnings
+                        .Select(warning => new ExportPreflightIssue(
+                            warning.Code,
+                            warning.Message)))
+                    .ToArray(),
+            });
+    }
+
     public async Task<StructuredDocumentPreparation> PrepareStructuredAsync(
         string projectDirectory,
         IReadOnlyList<ProjectPage> pages,
@@ -83,7 +130,16 @@ public sealed class DocumentExportService
         var document = draft with { DocumentTextHash = DocumentTextHash.Compute(draft) };
         var snapshotId = await repository.SaveDocumentSnapshotAsync(document, "SelectedConfirmedText", cancellationToken);
         var withConfirmedRuby = await repository.LoadStructuredDocumentAsync(projectId, snapshotId, cancellationToken);
-        return new StructuredDocumentPreparation(withConfirmedRuby, snapshotId, legacy);
+        var preflight = await BuildPreflightAsync(
+            repository,
+            snapshotId,
+            legacy,
+            cancellationToken);
+        return new StructuredDocumentPreparation(
+            withConfirmedRuby,
+            snapshotId,
+            legacy,
+            preflight);
     }
 
     public async Task<DocumentExportPreparation> PrepareAsync(
@@ -117,5 +173,27 @@ public sealed class DocumentExportService
         }
         var document = BookDocumentAssembler.Assemble(texts) with { PageBreakBeforeChapters = pageBreakBeforeChapters };
         return new DocumentExportPreparation(document, texts.Count, empty, unproofread, other);
+    }
+
+    private static async Task<ExportPreflightResult> BuildPreflightAsync(
+        SqliteProjectRepository repository,
+        Guid snapshotId,
+        DocumentExportPreparation legacy,
+        CancellationToken cancellationToken)
+    {
+        var rubyCounts = await repository.GetRubyPreflightCountsAsync(
+            snapshotId,
+            cancellationToken);
+        return new ExportPreflightResult(
+            legacy.IncludedPageCount,
+            legacy.UnproofreadPageCount,
+            legacy.EmptyPageCount,
+            legacy.OtherPagesWithText,
+            rubyCounts.Confirmed,
+            rubyCounts.Proposed,
+            rubyCounts.Unresolved,
+            rubyCounts.Stale,
+            0,
+            []);
     }
 }

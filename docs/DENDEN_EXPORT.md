@@ -1,8 +1,8 @@
 # Denden Converter export
 
-TateScribe creates the converter input deterministically. ChatGPT does not create or edit these files.
+TateScribe creates converter input deterministically. ChatGPT does not create or edit these files, and TateScribe does not generate EPUB or ZIP.
 
-Standard output:
+Standard output uses one flat folder:
 
 ```text
 DendenExport/
@@ -10,10 +10,38 @@ DendenExport/
   ddconv.yml
   default.css
   README.txt
+  cover.png
+  illustration-001.png
 ```
 
-An explicitly selected cover is copied as `cover.jpg`. Included pages explicitly classified as `Illustration` are copied to `images/illustration-001.ext` in page order; ordinary source screenshots are never copied there. Chapter splitting creates fixed names such as `chapter-001.md`. `ruby.csv` is an API-level opt-in for terms explicitly approved as having one global reading; conflicting readings are rejected. The normal UI uses inline ruby and does not create `ruby.csv`.
+Chapter splitting writes `chapter-001.md` etc. and does not create an empty `book.md`. An export with no content blocks is rejected before the destination is created. Illustration output is opt-in and includes only included pages explicitly classified as `PageRole=Illustration`. Every emitted illustration has a Markdown reference such as `![挿絵 1](illustration-001.png)`. When `displayLoiNav` is enabled, illustrations instead use the official `<figure class="illustration">`, `<img>`, and `<figcaption>` markup required for the illustration list. A joined paragraph is never split to insert an image; the image moves after the paragraph and preflight reports `IllustrationPlacementAdjusted`.
 
-Confirmed ruby is written as `{親文字|読み}`. Literal braces, vertical bars, backslashes, and common Markdown-sensitive characters in body text are escaped. Chapter titles become level-one headings, section titles/numbers become level-two headings, and scene breaks become `***`.
+Valid PNG, JPEG, and GIF data keep their actual format after decode/structure validation. Truncated or signature-spoofed files are rejected. WebP, BMP, TIFF, and other decodable input is encoded as PNG with a stable name. The extension always matches the output bytes. An output image over 3 MiB or an export over 100 files is rejected before the destination folder is created. Ordinary OCR screenshots are never copied.
 
-All text files use UTF-8 without BOM and LF line endings. File and YAML property ordering is fixed, and no time or random identifier is written. Vertical writing uses `pageDirection: rtl`. TateScribe does not generate EPUB or ZIP in this phase.
+`ddconv.yml` is UTF-8 without BOM, LF-only, and emitted in this fixed form:
+
+```yaml
+ddconvVersion: 1.0
+titles:
+  - content: "書名"
+creators:
+  - content: "著者"
+    role: aut
+language: "ja"
+pageDirection: rtl
+options:
+  skipCover: true
+  titlepage: true
+  tocInSpine: true
+  tocDisplayDepth: 2
+  displayLandmarksNav: false
+  displayLoiNav: false
+  autoTcy: true
+  tcyDigit: 2
+```
+
+Vertical writing uses `rtl`; horizontal writing uses `ltr`. TOC depth is 1–6 and `tcyDigit` is 2 or greater. YAML strings are double-quoted with backslashes and quotes escaped.
+
+Confirmed ruby is written as `{親文字|読み}`. Literal braces, vertical bars, backslashes, and Markdown-sensitive body characters are escaped. Chapter titles become level-one headings, section titles/numbers become level-two headings, and scene breaks become `***`. `ruby.csv` remains an API-level opt-in only for explicitly approved terms with one global reading.
+
+DOCX and Denden use the same preflight page/ruby rules. Proposed, Unresolved, and Stale ruby are reported and excluded.

@@ -43,14 +43,25 @@ public sealed class RubyImportValidator
         {
             ValidateRange(annotation.ParagraphId, annotation.Start, annotation.Length, annotation.BaseText,
                 annotation.EvidencePageMarkers, out var paragraph);
-            ErrorIf(string.IsNullOrWhiteSpace(annotation.Reading), "Reading", "readingは空にできません。");
-            ErrorIf(string.IsNullOrWhiteSpace(annotation.Evidence), "Evidence", "evidenceは空にできません。");
-            ErrorIf(annotation.EvidencePageMarkers is null, "EvidencePageMarkers",
+            ErrorFor(annotation, string.IsNullOrWhiteSpace(annotation.Reading), "Reading", "readingは空にできません。");
+            ErrorFor(annotation, string.IsNullOrWhiteSpace(annotation.Evidence), "Evidence", "evidenceは空にできません。");
+            ErrorFor(annotation, annotation.EvidencePageMarkers is null, "EvidencePageMarkers",
                 "evidencePageMarkers配列がありません。");
-            ErrorIf(annotation.Confidence is < 0 or > 1, "Confidence", "confidenceは0.0から1.0で指定してください。");
+            ErrorFor(annotation,
+                annotation.EvidencePageMarkers is { Count: > 1 }
+                && annotation.EvidencePageMarkers.Distinct(StringComparer.Ordinal).Count()
+                    != annotation.EvidencePageMarkers.Count,
+                "EvidencePageMarkersUnique",
+                "evidencePageMarkersに同じページを重複して指定できません。");
+            ErrorFor(annotation,
+                annotation.Source is RubySource.ImageConfirmed or RubySource.TextConfirmed
+                && annotation.EvidencePageMarkers is not { Count: > 0 },
+                "EvidencePageMarkers",
+                "ImageConfirmedまたはTextConfirmedには根拠ページが1件以上必要です。");
+            ErrorFor(annotation, annotation.Confidence is < 0 or > 1, "Confidence", "confidenceは0.0から1.0で指定してください。");
             if (!Enum.IsDefined(annotation.Source))
-                issues.Add(new RubyValidationIssue("Source", "sourceが許可された値ではありません。", true));
-            ErrorIf(!AllowedByPolicy(annotation.Source, context.Policy), "RubyPolicy",
+                AddFor(annotation, "Source", "sourceが許可された値ではありません。", true);
+            ErrorFor(annotation, !AllowedByPolicy(annotation.Source, context.Policy), "RubyPolicy",
                 $"source '{annotation.Source}' はrubyPolicy '{context.Policy}' の対象外です。");
             var annotationEnd = (long)annotation.Start + annotation.Length;
             if (paragraph is not null
@@ -58,45 +69,48 @@ public sealed class RubyImportValidator
                 && annotation.Length >= 1
                 && annotationEnd <= paragraph.PlainText.Length
                 && IsSplitSurrogate(paragraph.PlainText, annotation.Start, annotation.Length))
-                issues.Add(new RubyValidationIssue("Utf16Range", "startまたはlengthがUTF-16文字の途中を指しています。", true));
+                AddFor(annotation, "Utf16Range", "startまたはlengthがUTF-16文字の途中を指しています。", true);
 
             var paragraphKey = annotation.ParagraphId ?? string.Empty;
             var duplicateKey = $"{paragraphKey}\0{annotation.Start}\0{annotation.Length}\0{annotation.Reading}";
-            ErrorIf(!duplicates.Add(duplicateKey), "Duplicate", "同じルビ注釈が重複しています。");
+            ErrorFor(annotation, !duplicates.Add(duplicateKey), "Duplicate", "同じルビ注釈が重複しています。");
             if (!ranges.TryGetValue(paragraphKey, out var paragraphRanges))
             {
                 paragraphRanges = [];
                 ranges[paragraphKey] = paragraphRanges;
             }
             var end = (long)annotation.Start + annotation.Length;
-            ErrorIf(paragraphRanges.Any(range => annotation.Start < range.End && end > range.Start),
+            ErrorFor(annotation, paragraphRanges.Any(range => annotation.Start < range.End && end > range.Start),
                 "Overlap", "同じ段落内でルビ範囲が重複しています。");
             if (end <= int.MaxValue)
                 paragraphRanges.Add((annotation.Start, (int)end));
 
             if (annotation.Source is RubySource.DictionarySuggested or RubySource.ContextSuggested)
-                issues.Add(new RubyValidationIssue("SuggestedReading", "辞書または文脈だけを根拠にした候補です。", false));
+                AddFor(annotation, "SuggestedReading", "辞書または文脈だけを根拠にした候補です。", false);
             if (annotation.Confidence < 0.7)
-                issues.Add(new RubyValidationIssue("LowConfidence", "confidenceが低い候補です。", false));
-            if ((annotation.Reading ?? string.Empty).Any(character => !IsKana(character)))
-                issues.Add(new RubyValidationIssue("NonKanaReading", "readingにひらがな・カタカナ以外が含まれます。", false));
-            if (annotation.Source == RubySource.ImageConfirmed
-                && context.OcrCandidates is { Count: > 0 }
-                && !context.OcrCandidates.Any(candidate =>
-                    string.Equals(candidate.OcrText, annotation.BaseText, StringComparison.Ordinal)
-                    && (annotation.EvidencePageMarkers ?? []).Contains(candidate.PageMarker, StringComparer.Ordinal)))
-                issues.Add(new RubyValidationIssue("ImageCandidateMismatch", "画像根拠のルビがOCRルビ候補と一致しません。", false));
+                AddFor(annotation, "LowConfidence", "confidenceが低い候補です。", false);
+            if (RubyTextNormalizer.NormalizeReading(annotation.Reading).Any(character => !IsKana(character)))
+                AddFor(annotation, "NonKanaReading", "readingにひらがな・カタカナ以外が含まれます。", false);
+            if (annotation.Source == RubySource.ImageConfirmed)
+                ValidateImageCandidate(annotation);
         }
         foreach (var group in (document.Annotations ?? []).GroupBy(item => item.BaseText, StringComparer.Ordinal)
             .Where(group => group.Select(item => item.Reading).Distinct(StringComparer.Ordinal).Count() > 1))
-            issues.Add(new RubyValidationIssue("MultipleReadings",
-                $"同一表記「{group.Key}」に複数の読みがあります。出現位置ごとに確認してください。", false));
+            foreach (var annotation in group)
+                AddFor(annotation, "MultipleReadings",
+                    $"同一表記「{group.Key}」に複数の読みがあります。出現位置ごとに確認してください。", false);
         foreach (var unresolved in document.Unresolved ?? [])
         {
             ValidateRange(unresolved.ParagraphId, unresolved.Start, unresolved.Length, unresolved.BaseText,
                 unresolved.EvidencePageMarkers, out var paragraph);
             ErrorIf(unresolved.EvidencePageMarkers is null, "EvidencePageMarkers",
                 "未確定項目のevidencePageMarkers配列がありません。");
+            ErrorIf(
+                unresolved.EvidencePageMarkers is { Count: > 1 }
+                && unresolved.EvidencePageMarkers.Distinct(StringComparer.Ordinal).Count()
+                    != unresolved.EvidencePageMarkers.Count,
+                "EvidencePageMarkersUnique",
+                "未確定項目のevidencePageMarkersに同じページを重複して指定できません。");
             var unresolvedEnd = (long)unresolved.Start + unresolved.Length;
             if (paragraph is not null && unresolved.Start >= 0 && unresolved.Length >= 1
                 && unresolvedEnd <= paragraph.PlainText.Length
@@ -107,6 +121,42 @@ public sealed class RubyImportValidator
         }
 
         return new RubyImportPreview(document, issues);
+
+        void ValidateImageCandidate(RubyAnnotationProposal annotation)
+        {
+            var pageCandidates = (context.OcrCandidates ?? [])
+                .Where(candidate => (annotation.EvidencePageMarkers ?? [])
+                    .Contains(candidate.PageMarker, StringComparer.Ordinal))
+                .ToArray();
+            var reading = RubyTextNormalizer.NormalizeReading(annotation.Reading);
+            var readingMatches = pageCandidates
+                .Where(candidate => string.Equals(
+                    RubyTextNormalizer.NormalizeReading(candidate.ReadingCandidate),
+                    reading,
+                    StringComparison.Ordinal))
+                .ToArray();
+            if (readingMatches.Length == 0)
+            {
+                AddFor(annotation, "ImageCandidateMismatch",
+                    "画像根拠の読みがOCRルビ候補または根拠ページと一致しません。", false);
+                return;
+            }
+            if (readingMatches.Any(candidate =>
+                    candidate.BaseTextCandidate is not null
+                    && string.Equals(
+                        candidate.BaseTextCandidate,
+                        annotation.BaseText,
+                        StringComparison.Ordinal)))
+                return;
+            if (readingMatches.All(candidate => candidate.BaseTextCandidate is null))
+            {
+                AddFor(annotation, "BaseTextCandidateUnknown",
+                    "OCR座標から親文字候補を一意に特定できません。画像で確認してください。", false);
+                return;
+            }
+            AddFor(annotation, "ImageCandidateMismatch",
+                "OCRルビ候補の親文字候補が指定範囲の本文と一致しません。", false);
+        }
 
         void ValidateRange(
             string? paragraphId,
@@ -139,6 +189,31 @@ public sealed class RubyImportValidator
         void ErrorIf(bool condition, string code, string message)
         {
             if (condition) issues.Add(new RubyValidationIssue(code, message, true));
+        }
+
+        void ErrorFor(
+            RubyAnnotationProposal annotation,
+            bool condition,
+            string code,
+            string message)
+        {
+            if (condition) AddFor(annotation, code, message, true);
+        }
+
+        void AddFor(
+            RubyAnnotationProposal annotation,
+            string code,
+            string message,
+            bool isError)
+        {
+            issues.Add(new RubyValidationIssue(
+                code,
+                message,
+                isError,
+                annotation.ParagraphId,
+                annotation.Start,
+                annotation.Length,
+                annotation.AnnotationId == Guid.Empty ? null : annotation.AnnotationId));
         }
     }
 

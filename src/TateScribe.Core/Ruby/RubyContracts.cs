@@ -92,7 +92,14 @@ public sealed record RubyImportDocument(
     [property: JsonRequired] IReadOnlyList<RubyAnnotationProposal> Annotations,
     [property: JsonRequired] IReadOnlyList<RubyUnresolvedItem> Unresolved);
 
-public sealed record RubyValidationIssue(string Code, string Message, bool IsError);
+public sealed record RubyValidationIssue(
+    string Code,
+    string Message,
+    bool IsError,
+    string? ParagraphId = null,
+    int? Start = null,
+    int? Length = null,
+    Guid? AnnotationId = null);
 
 public sealed record RubyValidationContext(
     Guid ProjectId,

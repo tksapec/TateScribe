@@ -71,6 +71,8 @@ public sealed class MainWindowLayoutTests
         Assert.Contains("本文根拠だけ一括確定", review, StringComparison.Ordinal);
         Assert.Contains("x:Name=\"DirectionSelector\"", denden, StringComparison.Ordinal);
         Assert.Contains("x:Name=\"TocDepthEditor\"", denden, StringComparison.Ordinal);
+        Assert.Contains("x:Name=\"IncludeIllustrationsCheck\"", denden, StringComparison.Ordinal);
+        Assert.Contains("通常のOCR画面は含めません", denden, StringComparison.Ordinal);
     }
 
     [Fact]
@@ -115,6 +117,37 @@ public sealed class MainWindowLayoutTests
                      "RubyWorkflowService", "DendenExportService"
                  })
             Assert.Contains(service, source, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Ruby_review_revalidates_saved_and_live_edited_candidates()
+    {
+        var root = FindRepositoryRoot();
+        var workflow = File.ReadAllText(Path.Combine(
+            root, "src", "TateScribe.App", "Services", "RubyWorkflowService.cs"));
+        var review = File.ReadAllText(Path.Combine(
+            root, "src", "TateScribe.App", "RubyReviewWindow.xaml.cs"));
+        var main = File.ReadAllText(Path.Combine(
+            root, "src", "TateScribe.App", "MainWindow.xaml.cs"));
+
+        Assert.Contains(
+            "return new RubyImportResult(batch, ValidateReviewed(batch, import));",
+            workflow,
+            StringComparison.Ordinal);
+        Assert.Contains("validateReviewed?.Invoke(current)", review, StringComparison.Ordinal);
+        Assert.Equal(
+            2,
+            Count(main, "reviewed => service.ValidateReviewed(result.Batch, reviewed)"));
+    }
+
+    private static int Count(string value, string fragment)
+    {
+        var count = 0;
+        for (var index = 0;
+             (index = value.IndexOf(fragment, index, StringComparison.Ordinal)) >= 0;
+             index += fragment.Length)
+            count++;
+        return count;
     }
 
     private static string FindRepositoryRoot()

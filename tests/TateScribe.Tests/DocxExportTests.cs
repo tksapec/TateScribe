@@ -11,6 +11,40 @@ public sealed class DocxExportTests : IDisposable
     private readonly string _path = Path.Combine(Path.GetTempPath(), $"TateScribe-{Guid.NewGuid():N}.docx");
 
     [Fact]
+    public void Export_preflight_uses_one_summary_for_docx_and_denden_safety_counts()
+    {
+        var page = new TateScribe.Core.Projects.ProjectPage(
+            Guid.NewGuid(), "other.png", "other.png", "hash", 0, true, 0,
+            PageRole: TateScribe.Core.Projects.PageRole.Other);
+        var preflight = new ExportPreflightResult(
+            120,
+            3,
+            1,
+            [page],
+            45,
+            2,
+            4,
+            2,
+            3,
+            [new ExportPreflightIssue(
+                "IllustrationPlacementAdjusted",
+                "挿絵位置を段落後へ調整しました。")]);
+
+        var message = preflight.FormatConfirmation("でんでん用データ");
+
+        Assert.True(preflight.RequiresConfirmation);
+        Assert.False(preflight.HasFatalErrors);
+        Assert.Contains("未校正ページ: 3", message, StringComparison.Ordinal);
+        Assert.Contains("PageRole=Otherの本文ページ: 1", message, StringComparison.Ordinal);
+        Assert.Contains("確定ルビ: 45", message, StringComparison.Ordinal);
+        Assert.Contains("未確定ルビ: 4", message, StringComparison.Ordinal);
+        Assert.Contains("Proposedルビ: 2", message, StringComparison.Ordinal);
+        Assert.Contains("Staleルビ: 2", message, StringComparison.Ordinal);
+        Assert.Contains("挿絵: 3", message, StringComparison.Ordinal);
+        Assert.Contains("出力されません", message, StringComparison.Ordinal);
+    }
+
+    [Fact]
     public async Task Export_writes_heading_and_ruby_without_page_markers()
     {
         var exporter = new OpenXmlDocumentExporter();

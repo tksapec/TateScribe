@@ -119,12 +119,31 @@ public sealed class RubyPackageExporter
                   "start": { "type": "integer", "minimum": 0 },
                   "length": { "type": "integer", "minimum": 1 },
                   "baseText": { "type": "string", "minLength": 1 },
-                  "reading": { "type": "string", "minLength": 1 },
+                  "reading": { "type": "string", "minLength": 1, "pattern": "\\S" },
                   "source": { "enum": ["ImageConfirmed", "TextConfirmed", "UserConfirmed", "DictionarySuggested", "ContextSuggested"] },
                   "confidence": { "type": "number", "minimum": 0, "maximum": 1 },
-                  "evidencePageMarkers": { "type": "array", "items": { "type": "string" } },
-                  "evidence": { "type": "string" }
-                }
+                  "evidencePageMarkers": {
+                    "type": "array",
+                    "uniqueItems": true,
+                    "items": { "type": "string", "minLength": 1 }
+                  },
+                  "evidence": { "type": "string", "minLength": 1, "pattern": "\\S" }
+                },
+                "allOf": [
+                  {
+                    "if": {
+                      "properties": {
+                        "source": { "enum": ["ImageConfirmed", "TextConfirmed"] }
+                      },
+                      "required": ["source"]
+                    },
+                    "then": {
+                      "properties": {
+                        "evidencePageMarkers": { "minItems": 1 }
+                      }
+                    }
+                  }
+                ]
               }
             },
             "unresolved": {
@@ -138,8 +157,12 @@ public sealed class RubyPackageExporter
                   "start": { "type": "integer", "minimum": 0 },
                   "length": { "type": "integer", "minimum": 1 },
                   "baseText": { "type": "string", "minLength": 1 },
-                  "evidencePageMarkers": { "type": "array", "items": { "type": "string" } },
-                  "reason": { "type": "string", "minLength": 1 }
+                  "evidencePageMarkers": {
+                    "type": "array",
+                    "uniqueItems": true,
+                    "items": { "type": "string", "minLength": 1 }
+                  },
+                  "reason": { "type": "string", "minLength": 1, "pattern": "\\S" }
                 }
               }
             }

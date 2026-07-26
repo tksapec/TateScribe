@@ -13,6 +13,7 @@
       <Grid.RowDefinitions>
         <RowDefinition Height="Auto" /><RowDefinition Height="Auto" />
         <RowDefinition Height="Auto" /><RowDefinition Height="Auto" />
+        <RowDefinition Height="Auto" />
         <RowDefinition Height="Auto" /><RowDefinition Height="Auto" />
         <RowDefinition Height="Auto" /><RowDefinition Height="Auto" />
         <RowDefinition Height="Auto" /><RowDefinition Height="Auto" />
@@ -45,8 +46,10 @@
       <CheckBox x:Name="AutoTcyCheck" Grid.Row="8" Grid.ColumnSpan="2" Margin="0,3" IsChecked="True">自動縦中横</CheckBox>
       <TextBlock Grid.Row="9" VerticalAlignment="Center" Text="縦中横の数字桁数" />
       <TextBox x:Name="TcyDigitsEditor" Grid.Row="9" Grid.Column="1" Width="70" HorizontalAlignment="Left" Margin="8,3" Text="2" />
-      <CheckBox x:Name="SplitChapterCheck" Grid.Row="10" Grid.ColumnSpan="2" Margin="0,3">章単位でファイルを分割</CheckBox>
-      <StackPanel Grid.Row="11" Grid.ColumnSpan="2" Orientation="Horizontal" HorizontalAlignment="Right" Margin="0,16,0,0">
+      <CheckBox x:Name="IncludeIllustrationsCheck" Grid.Row="10" Grid.ColumnSpan="2" Margin="0,3"
+                ToolTip="PageRole=Illustrationに設定したページだけを、本文から参照される挿絵として出力します。通常のOCR画面は含めません。">挿絵ページを含める</CheckBox>
+      <CheckBox x:Name="SplitChapterCheck" Grid.Row="11" Grid.ColumnSpan="2" Margin="0,3">章単位でファイルを分割</CheckBox>
+      <StackPanel Grid.Row="12" Grid.ColumnSpan="2" Orientation="Horizontal" HorizontalAlignment="Right" Margin="0,16,0,0">
         <Button Padding="14,7" Margin="0,0,8,0" Click="Accept" IsDefault="True">出力先を選ぶ</Button>
         <Button Padding="14,7" Click="Cancel" IsCancel="True">キャンセル</Button>
       </StackPanel>

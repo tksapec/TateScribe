@@ -14,3 +14,10 @@
 12. Run build, fast tests, Python tests, publish without archive, UI inspection, review, commit, and push.
 
 The detailed development record is in `docs/superpowers/plans/2026-07-26-structured-ruby-and-denden.md`.
+
+## Denden and ruby evidence hardening
+
+The follow-up plan for official `ddconv.yml`, referenced illustration assets,
+safe image conversion, schema-v9 ruby evidence linking, candidate-scoped
+validation, and shared export preflight is in
+`docs/superpowers/plans/2026-07-26-denden-and-ruby-evidence-hardening.md`.

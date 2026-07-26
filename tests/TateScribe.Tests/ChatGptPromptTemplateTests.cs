@@ -29,6 +29,14 @@ public sealed class ChatGptPromptTemplateTests
         Assert.Contains("UTF-16コード単位", text, StringComparison.Ordinal);
         Assert.Contains("unresolved", text, StringComparison.Ordinal);
         Assert.Contains("rubyPolicy", text, StringComparison.Ordinal);
+        Assert.Contains("formatVersionには1", text, StringComparison.Ordinal);
+        Assert.Contains("manifest.jsonのprojectId", text, StringComparison.Ordinal);
+        Assert.Contains("manifest.jsonのbatchId", text, StringComparison.Ordinal);
+        Assert.Contains("manifest.jsonのdocumentTextHash", text, StringComparison.Ordinal);
+        Assert.Contains("候補がなくても空配列", text, StringComparison.Ordinal);
+        Assert.Contains("readingCandidateはルビの読み候補", text, StringComparison.Ordinal);
+        Assert.Contains("baseTextCandidateは親文字候補", text, StringComparison.Ordinal);
+        Assert.Contains("未知のプロパティ", text, StringComparison.Ordinal);
     }
 
     [Fact]

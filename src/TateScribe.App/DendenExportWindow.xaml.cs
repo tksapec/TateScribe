@@ -16,10 +16,14 @@ public partial class DendenExportWindow : Window
 
     public DendenExportOptions? Options { get; private set; }
     public string? CoverPath => string.IsNullOrWhiteSpace(CoverPathEditor.Text) ? null : CoverPathEditor.Text;
+    public bool IncludeIllustrations => IncludeIllustrationsCheck.IsChecked == true;
 
     private void ChooseCover(object sender, RoutedEventArgs e)
     {
-        var dialog = new OpenFileDialog { Filter = "JPEG画像|*.jpg;*.jpeg" };
+        var dialog = new OpenFileDialog
+        {
+            Filter = "画像ファイル|*.png;*.jpg;*.jpeg;*.gif;*.webp;*.bmp;*.tif;*.tiff|すべてのファイル|*.*",
+        };
         if (dialog.ShowDialog(this) == true) CoverPathEditor.Text = dialog.FileName;
     }
 
@@ -29,15 +33,16 @@ public partial class DendenExportWindow : Window
             || !int.TryParse(TocDepthEditor.Text, NumberStyles.None, CultureInfo.InvariantCulture, out var depth)
             || depth is < 1 or > 6
             || !int.TryParse(TcyDigitsEditor.Text, NumberStyles.None, CultureInfo.InvariantCulture, out var digits)
-            || digits is < 1 or > 4)
+            || digits < 2)
         {
-            MessageBox.Show(this, "書名・著者を入力し、目次深度は1～6、縦中横の桁数は1～4で指定してください。",
+            MessageBox.Show(this, "書名・著者を入力し、目次深度は1～6、縦中横の桁数は2以上で指定してください。",
                 "入力内容を確認してください", MessageBoxButton.OK, MessageBoxImage.Warning);
             return;
         }
         var vertical = DirectionSelector.SelectedItem is ComboBoxItem { Tag: "rtl" };
         Options = new DendenExportOptions(
-            TitleEditor.Text.Trim(), CreatorEditor.Text.Trim(), LanguageEditor.Text.Trim(),
+            TitleEditor.Text.Trim(), CreatorEditor.Text.Trim(),
+            string.IsNullOrWhiteSpace(LanguageEditor.Text) ? "ja" : LanguageEditor.Text.Trim(),
             vertical, TitlePageCheck.IsChecked == true, TocCheck.IsChecked == true,
             depth, AutoTcyCheck.IsChecked == true, digits, SplitChapterCheck.IsChecked == true);
         DialogResult = true;

@@ -226,6 +226,135 @@ public sealed class RubyWorkflowTests
         Assert.Contains(preview.Issues, issue => issue.Code == "Range" && issue.IsError);
     }
 
+    [Fact]
+    public void Validator_matches_image_reading_after_safe_kana_normalization()
+    {
+        var paragraph = Paragraph("八角");
+        var document = Document(paragraph);
+        var proposal = Proposal(paragraph, 0, 2, "八角", "やすみ");
+        var candidate = new RubyOcrCandidate(
+            "0001", "ﾔｽﾐ", "八角", 10, 20, 30, 40, .9,
+            Guid.NewGuid(), false, false, .9);
+        var context = Context(document) with { OcrCandidates = [candidate] };
+
+        var preview = new RubyImportValidator().Validate(Json(document, proposal), context);
+
+        Assert.DoesNotContain(preview.Issues, issue => issue.Code == "ImageCandidateMismatch");
+        Assert.DoesNotContain(preview.Issues, issue => issue.Code == "BaseTextCandidateUnknown");
+    }
+
+    [Fact]
+    public void Validator_reports_candidate_scoped_reading_mismatch()
+    {
+        var paragraph = Paragraph("八角");
+        var document = Document(paragraph);
+        var proposal = Proposal(paragraph, 0, 2, "八角", "やすみ");
+        var candidate = new RubyOcrCandidate(
+            "0001", "はっかく", "八角", 10, 20, 30, 40, .9,
+            Guid.NewGuid(), false, false, .9);
+        var context = Context(document) with { OcrCandidates = [candidate] };
+
+        var preview = new RubyImportValidator().Validate(Json(document, proposal), context);
+
+        var issue = Assert.Single(
+            preview.Issues,
+            item => item.Code == "ImageCandidateMismatch");
+        Assert.Equal(paragraph.ParagraphId.ToString("D"), issue.ParagraphId);
+        Assert.Equal(0, issue.Start);
+        Assert.Equal(2, issue.Length);
+    }
+
+    [Fact]
+    public void Validator_warns_when_base_text_candidate_is_unknown_without_calling_it_a_mismatch()
+    {
+        var paragraph = Paragraph("八角");
+        var document = Document(paragraph);
+        var proposal = Proposal(paragraph, 0, 2, "八角", "やすみ");
+        var candidate = new RubyOcrCandidate(
+            "0001", "ヤスミ", null, 10, 20, 30, 40, .9,
+            Guid.NewGuid(), false, false, null);
+        var context = Context(document) with { OcrCandidates = [candidate] };
+
+        var preview = new RubyImportValidator().Validate(Json(document, proposal), context);
+
+        Assert.Contains(preview.Issues, issue => issue.Code == "BaseTextCandidateUnknown");
+        Assert.DoesNotContain(preview.Issues, issue => issue.Code == "ImageCandidateMismatch");
+    }
+
+    [Fact]
+    public void Validator_warns_when_image_candidate_coordinates_are_not_available()
+    {
+        var paragraph = Paragraph("八角");
+        var document = Document(paragraph);
+        var proposal = Proposal(paragraph, 0, 2, "八角", "やすみ");
+
+        var preview = new RubyImportValidator().Validate(
+            Json(document, proposal),
+            Context(document) with { OcrCandidates = [] });
+
+        Assert.Contains(preview.Issues, issue => issue.Code == "ImageCandidateMismatch");
+    }
+
+    [Theory]
+    [InlineData("ImageConfirmed")]
+    [InlineData("TextConfirmed")]
+    public void Validator_requires_nonempty_unique_evidence_markers_for_confirmed_sources(
+        string source)
+    {
+        var paragraph = Paragraph("八角");
+        var document = Document(paragraph);
+        var proposal = Proposal(paragraph, 0, 2, "八角", "やすみ") with
+        {
+            Source = Enum.Parse<RubySource>(source),
+            EvidencePageMarkers = [],
+        };
+
+        var empty = new RubyImportValidator().Validate(Json(document, proposal), Context(document));
+
+        Assert.False(empty.IsValid);
+        Assert.Contains(empty.Issues, issue => issue.Code == "EvidencePageMarkers" && issue.IsError);
+
+        var duplicate = proposal with { EvidencePageMarkers = ["0001", "0001"] };
+        var duplicated = new RubyImportValidator().Validate(Json(document, duplicate), Context(document));
+        Assert.False(duplicated.IsValid);
+        Assert.Contains(duplicated.Issues, issue => issue.Code == "EvidencePageMarkersUnique" && issue.IsError);
+    }
+
+    [Fact]
+    public void Bulk_confirmation_accepts_only_clean_high_confidence_image_or_text_evidence()
+    {
+        var paragraph = Paragraph("八角");
+        var clean = Proposal(paragraph, 0, 2, "八角", "やすみ") with
+        {
+            AnnotationId = Guid.NewGuid(),
+            Source = RubySource.ImageConfirmed,
+            Confidence = .9,
+        };
+        var warning = new RubyValidationIssue(
+            "ImageCandidateMismatch",
+            "不一致",
+            false,
+            clean.ParagraphId,
+            clean.Start,
+            clean.Length,
+            clean.AnnotationId);
+
+        Assert.True(RubyBulkConfirmationPolicy.CanConfirm(
+            clean, RubySource.ImageConfirmed, []));
+        Assert.False(RubyBulkConfirmationPolicy.CanConfirm(
+            clean, RubySource.ImageConfirmed, [warning]));
+        Assert.False(RubyBulkConfirmationPolicy.CanConfirm(
+            clean with { Confidence = .69 }, RubySource.ImageConfirmed, []));
+        Assert.False(RubyBulkConfirmationPolicy.CanConfirm(
+            clean with { Source = RubySource.DictionarySuggested },
+            RubySource.ImageConfirmed,
+            []));
+        Assert.True(RubyBulkConfirmationPolicy.CanConfirm(
+            clean with { Source = RubySource.TextConfirmed, Evidence = "本文に読みが明記" },
+            RubySource.TextConfirmed,
+            []));
+    }
+
     private static readonly Guid BatchId = Guid.NewGuid();
     private static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.Web)
     {

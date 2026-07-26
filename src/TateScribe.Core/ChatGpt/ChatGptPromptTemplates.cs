@@ -55,6 +55,15 @@ public sealed class ChatGptPromptTemplateProvider : IChatGptPromptTemplateProvid
         4. 指定されたJSONスキーマに従ったJSONだけを返してください。
         5. JSONの前後に説明文やMarkdownコードフェンスを付けないでください。
 
+        識別情報とJSON形式:
+        1. formatVersionには1を指定してください。
+        2. manifest.jsonのprojectIdを一字も変更せず、そのまま出力してください。
+        3. manifest.jsonのbatchIdを一字も変更せず、そのまま出力してください。
+        4. manifest.jsonのdocumentTextHashを一字も変更せず、そのまま出力してください。
+        5. annotationsとunresolvedは、候補がなくても空配列として必ず出力してください。
+        6. output-schema.jsonのプロパティ名を変更しないでください。
+        7. output-schema.jsonにない未知のプロパティを追加しないでください。
+
         ルビの判断規則:
         1. 原文画像に実際のルビがある場合は、画像を根拠としてImageConfirmedとしてください。
         2. 本文中に「本来ヤスミと読む」等、読みが明記されている場合はTextConfirmedとしてください。
@@ -67,8 +76,16 @@ public sealed class ChatGptPromptTemplateProvider : IChatGptPromptTemplateProvid
         9. 原書にない総ルビを勝手に追加しないでください。
         10. rubyPolicyに従ってください。
 
+        OCR候補の扱い:
+        1. ruby-candidates.jsonのreadingCandidateはルビの読み候補です。
+        2. baseTextCandidateは親文字候補です。
+        3. readingCandidateを親文字として扱わないでください。
+        4. baseTextCandidateは参考情報であり、confirmed-document.jsonの本文範囲を正本としてください。
+        5. OCR候補が不明確な場合は対応する画像を確認してください。
+        6. 画像で読みを確定できない場合はunresolvedへ入れてください。
+
         位置指定:
-        - paragraphIdを変更しないでください。
+        - paragraphIdはconfirmed-document.jsonの値をそのまま使用し、変更しないでください。
         - startとlengthはUTF-16コード単位で指定してください。
         - baseTextは指定範囲の本文と完全一致させてください。
         - 同じ文字列が複数ある場合もstartで個別に指定してください。

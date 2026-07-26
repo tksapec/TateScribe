@@ -450,7 +450,7 @@ public partial class MainWindow : Window
                     PageList.ScrollIntoView(PageList.SelectedItem);
                     new PageReviewWindow(_projectDirectory, page) { Owner = review }.ShowDialog();
                 }
-            }) { Owner = this };
+            }, reviewed => service.ValidateReviewed(result.Batch, reviewed)) { Owner = this };
             if (review.ShowDialog() != true) return;
             var validated = service.ValidateReviewed(result.Batch, review.ReviewedDocument);
             if (!validated.IsValid)
@@ -493,7 +493,7 @@ public partial class MainWindow : Window
                     PageList.ScrollIntoView(PageList.SelectedItem);
                     new PageReviewWindow(_projectDirectory, page) { Owner = review }.ShowDialog();
                 }
-            }) { Owner = this };
+            }, reviewed => service.ValidateReviewed(result.Batch, reviewed)) { Owner = this };
             if (review.ShowDialog() != true) return;
             var validated = service.ValidateReviewed(result.Batch, review.ReviewedDocument);
             if (!validated.IsValid)
@@ -521,12 +521,18 @@ public partial class MainWindow : Window
             IsEnabled = false;
             var preparation = await new DocumentExportService().PrepareStructuredAsync(
                 _projectDirectory, _pages, PageBreakBeforeChapters.IsChecked == true, CancellationToken.None);
-            if (preparation.LegacyPreparation.OtherPagesWithText.Count > 0
-                && MessageBox.Show(this,
-                    $"PageRole=Other の本文ページ {preparation.LegacyPreparation.OtherPagesWithText.Count} 件を含めます。続行しますか？",
-                    "Otherページの確認", MessageBoxButton.YesNo, MessageBoxImage.Warning) != MessageBoxResult.Yes) return;
-            if (preparation.LegacyPreparation.UnproofreadPageCount > 0 && MessageBox.Show(this, $"未校正ページ {preparation.LegacyPreparation.UnproofreadPageCount} 件を含めてDOCXを出力します。続行しますか？", "未校正本文を含む出力", MessageBoxButton.YesNo, MessageBoxImage.Warning) != MessageBoxResult.Yes) return;
             var outputPath = BookFolderPaths.GetDocumentPath(_projectDirectory);
+            var preflight = File.Exists(outputPath)
+                ? preparation.Preflight with
+                {
+                    Issues = preparation.Preflight.Issues.Append(
+                        new ExportPreflightIssue(
+                            "OutputExists",
+                            $"既存のDOCXを上書きします: {outputPath}"))
+                        .ToArray(),
+                }
+                : preparation.Preflight;
+            if (!ConfirmExport(preflight, "DOCX")) return;
             await new OpenXmlDocumentExporter().ExportAsync(preparation.Document, outputPath,
                 PageBreakBeforeChapters.IsChecked == true, "游明朝", CancellationToken.None);
             var summary = preparation.LegacyPreparation.EmptyPageCount == 0
@@ -558,18 +564,36 @@ public partial class MainWindow : Window
         try
         {
             IsEnabled = false;
-            var preparation = await new DocumentExportService().PrepareStructuredAsync(
-                _projectDirectory, _pages, false, CancellationToken.None);
+            var preparation = await new DocumentExportService().PrepareDendenAsync(
+                _projectDirectory,
+                _pages,
+                settings.IncludeIllustrations,
+                CancellationToken.None);
             var options = settings.Options with
             {
                 CoverImagePath = settings.CoverPath,
-                IllustrationImagePaths = _pages
-                    .Where(page => page.IsIncluded && page.PageRole == PageRole.Illustration)
-                    .OrderBy(page => page.SortOrder)
-                    .Select(page => page.SourcePath)
+            };
+            var exporter = new DendenExportService();
+            var dendenIssues = exporter.Inspect(preparation.Document, options);
+            var outputIssues = Directory.Exists(destination) || File.Exists(destination)
+                ?
+                new[]
+                {
+                        new ExportPreflightIssue(
+                            "OutputExists",
+                            $"出力先は既に存在します: {destination}",
+                            true),
+                }
+                : [];
+            var preflight = preparation.Preflight with
+            {
+                Issues = preparation.Preflight.Issues
+                    .Concat(dendenIssues)
+                    .Concat(outputIssues)
                     .ToArray(),
             };
-            await new DendenExportService().ExportAsync(
+            if (!ConfirmExport(preflight, "でんでん用データ")) return;
+            await exporter.ExportAsync(
                 preparation.Document, options, destination, CancellationToken.None);
             MessageBox.Show(this,
                 $"でんでんコンバーター用データを出力しました。EPUB・ZIPは作成していません。{Environment.NewLine}{destination}",
@@ -583,6 +607,31 @@ public partial class MainWindow : Window
         {
             IsEnabled = true;
         }
+    }
+
+    private bool ConfirmExport(ExportPreflightResult preflight, string destinationLabel)
+    {
+        if (preflight.HasFatalErrors)
+        {
+            MessageBox.Show(
+                this,
+                string.Join(
+                    Environment.NewLine,
+                    preflight.Issues
+                        .Where(issue => issue.IsFatal)
+                        .Select(issue => $"・{issue.Message}")),
+                "出力前確認でエラーが見つかりました",
+                MessageBoxButton.OK,
+                MessageBoxImage.Error);
+            return false;
+        }
+        if (!preflight.RequiresConfirmation) return true;
+        return MessageBox.Show(
+            this,
+            preflight.FormatConfirmation(destinationLabel),
+            "出力内容の確認",
+            MessageBoxButton.YesNo,
+            MessageBoxImage.Warning) == MessageBoxResult.Yes;
     }
 
     private void ShowChatGptProofreadingPrompt(object sender, RoutedEventArgs e)

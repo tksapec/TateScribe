@@ -1,6 +1,8 @@
 using System.Text;
+using System.Text.Json;
 using DocumentFormat.OpenXml.Packaging;
 using DocumentFormat.OpenXml.Validation;
+using OpenCvSharp;
 using TateScribe.Core.Denden;
 using TateScribe.Core.ChatGpt;
 using TateScribe.Core.Export;
@@ -35,15 +37,81 @@ public sealed class RubyPackageAndExportTests : IDisposable
         Assert.Collection(candidates,
             candidate =>
             {
-                Assert.Equal("候補", candidate.OcrText);
+                Assert.Equal("候補", candidate.ReadingCandidate);
+                Assert.Null(candidate.BaseTextCandidate);
                 Assert.False(candidate.ReturnedToBody);
             },
             candidate =>
             {
-                Assert.Equal("本文へ戻した", candidate.OcrText);
+                Assert.Equal("本文へ戻した", candidate.ReadingCandidate);
+                Assert.Null(candidate.BaseTextCandidate);
                 Assert.True(candidate.ReturnedToBody);
                 Assert.True(candidate.IncludedInDraft);
             });
+    }
+
+    [Fact]
+    public void Candidate_selector_links_reading_to_a_nearby_vertical_body_region()
+    {
+        var runId = Guid.NewGuid();
+        var words = new[]
+        {
+            new OcrWordReviewState(runId, 0, new OcrWord("ヤスミ", .91, 80, 10, 90, 50),
+                "RubyCandidate", false, false, "RubyCandidate"),
+            new OcrWordReviewState(runId, 1, new OcrWord("八角", .97, 60, 12, 76, 48),
+                "Body", true, true, "Body"),
+            new OcrWordReviewState(runId, 2, new OcrWord("遠い本文", .95, 10, 200, 30, 250),
+                "Body", true, true, "Body"),
+        };
+
+        var candidate = Assert.Single(RubyOcrCandidateSelector.Select(
+            "0001", "ページ全体の本文を親文字にしない", words));
+
+        Assert.Equal("ヤスミ", candidate.ReadingCandidate);
+        Assert.Equal("八角", candidate.BaseTextCandidate);
+        Assert.NotNull(candidate.LinkConfidence);
+        Assert.True(candidate.LinkConfidence > 0.5);
+        Assert.NotEqual("ページ全体の本文を親文字にしない", candidate.BaseTextCandidate);
+    }
+
+    [Fact]
+    public void Candidate_selector_leaves_base_text_null_when_coordinate_link_is_ambiguous()
+    {
+        var runId = Guid.NewGuid();
+        var words = new[]
+        {
+            new OcrWordReviewState(runId, 0, new OcrWord("よみ", .9, 50, 10, 60, 50),
+                "RubyCandidate", false, false, "RubyCandidate"),
+            new OcrWordReviewState(runId, 1, new OcrWord("甲", .9, 35, 10, 45, 50),
+                "Body", true, true, "Body"),
+            new OcrWordReviewState(runId, 2, new OcrWord("乙", .9, 65, 10, 75, 50),
+                "Body", true, true, "Body"),
+        };
+
+        var candidate = Assert.Single(RubyOcrCandidateSelector.Select(
+            "0001", "甲乙", words));
+
+        Assert.Null(candidate.BaseTextCandidate);
+        Assert.Null(candidate.LinkConfidence);
+    }
+
+    [Fact]
+    public void Candidate_selector_does_not_link_a_vertically_overlapping_but_distant_body_region()
+    {
+        var runId = Guid.NewGuid();
+        var words = new[]
+        {
+            new OcrWordReviewState(runId, 0, new OcrWord("ヤスミ", .92, 500, 10, 510, 50),
+                "RubyCandidate", true, true, "RubyCandidate"),
+            new OcrWordReviewState(runId, 1, new OcrWord("八角", .95, 0, 10, 10, 50),
+                "Body", true, true, "Body"),
+        };
+
+        var candidate = Assert.Single(RubyOcrCandidateSelector.Select(
+            "0001", "八角", words));
+
+        Assert.Null(candidate.BaseTextCandidate);
+        Assert.Null(candidate.LinkConfidence);
     }
 
     [Fact]
@@ -71,6 +139,20 @@ public sealed class RubyPackageAndExportTests : IDisposable
         Assert.Equal(
             new ChatGptPromptTemplateProvider().GetTemplate(ChatGptTaskType.RubyAnnotation),
             await File.ReadAllTextAsync(Path.Combine(destination, "instructions.md")));
+        var candidatesJson = await File.ReadAllTextAsync(
+            Path.Combine(destination, "ruby-candidates.json"));
+        Assert.Contains("\"readingCandidate\"", candidatesJson, StringComparison.Ordinal);
+        Assert.Contains("\"baseTextCandidate\"", candidatesJson, StringComparison.Ordinal);
+        Assert.DoesNotContain("\"ocrText\"", candidatesJson, StringComparison.Ordinal);
+        Assert.DoesNotContain("\"legacyAdjacentBodyText\"", candidatesJson, StringComparison.Ordinal);
+        var schema = await File.ReadAllTextAsync(Path.Combine(destination, "output-schema.json"));
+        using var parsedSchema = JsonDocument.Parse(schema);
+        Assert.Equal(
+            "https://json-schema.org/draft/2020-12/schema",
+            parsedSchema.RootElement.GetProperty("$schema").GetString());
+        Assert.Contains("\"evidence\": { \"type\": \"string\", \"minLength\": 1", schema, StringComparison.Ordinal);
+        Assert.Contains("\"uniqueItems\": true", schema, StringComparison.Ordinal);
+        Assert.Contains("\"minItems\": 1", schema, StringComparison.Ordinal);
     }
 
     [Fact]
@@ -118,10 +200,60 @@ public sealed class RubyPackageAndExportTests : IDisposable
         var markdown = await File.ReadAllTextAsync(Path.Combine(first, "book.md"), Encoding.UTF8);
         Assert.Contains("{八角|やすみ}", markdown, StringComparison.Ordinal);
         Assert.Contains("\\{注\\}", markdown, StringComparison.Ordinal);
-        Assert.Contains("pageDirection: rtl", await File.ReadAllTextAsync(Path.Combine(first, "ddconv.yml")), StringComparison.Ordinal);
+        var yaml = await File.ReadAllTextAsync(Path.Combine(first, "ddconv.yml"));
+        Assert.StartsWith("ddconvVersion: 1.0\n", yaml, StringComparison.Ordinal);
+        Assert.Contains("titles:\n  - content: \"書名\"", yaml, StringComparison.Ordinal);
+        Assert.Contains("creators:\n  - content: \"著者\"\n    role: aut", yaml, StringComparison.Ordinal);
+        Assert.Contains("pageDirection: rtl", yaml, StringComparison.Ordinal);
+        Assert.Contains("  skipCover: true", yaml, StringComparison.Ordinal);
+        Assert.Contains("  titlepage: true", yaml, StringComparison.Ordinal);
+        Assert.Contains("  tocInSpine: true", yaml, StringComparison.Ordinal);
+        Assert.Contains("  tocDisplayDepth: 2", yaml, StringComparison.Ordinal);
+        Assert.Contains("  displayLandmarksNav: false", yaml, StringComparison.Ordinal);
+        Assert.Contains("  displayLoiNav: false", yaml, StringComparison.Ordinal);
+        Assert.Contains("  tcyDigit: 2", yaml, StringComparison.Ordinal);
+        Assert.DoesNotContain("titlePage:", yaml, StringComparison.Ordinal);
+        Assert.DoesNotContain("tableOfContents", yaml, StringComparison.Ordinal);
+        Assert.DoesNotContain("tcyDigitCount", yaml, StringComparison.Ordinal);
         Assert.False(File.Exists(Path.Combine(first, "ruby.csv")));
         Assert.Empty(Directory.GetFiles(first, "*.epub"));
         Assert.Empty(Directory.GetFiles(first, "*.zip"));
+    }
+
+    [Fact]
+    public async Task Denden_rejects_invalid_tcy_digit_before_creating_destination()
+    {
+        Directory.CreateDirectory(tempPath);
+        var destination = Path.Combine(tempPath, "invalid-tcy");
+
+        var error = await Assert.ThrowsAsync<ArgumentOutOfRangeException>(() =>
+            new DendenExportService().ExportAsync(
+                CreateDocument(),
+                new DendenExportOptions("書名", "著者", TcyDigitCount: 1),
+                destination,
+                CancellationToken.None));
+
+        Assert.Equal("TcyDigitCount", error.ParamName);
+        Assert.False(Directory.Exists(destination));
+    }
+
+    [Fact]
+    public async Task Denden_uses_ja_when_language_is_blank_and_quotes_yaml_safely()
+    {
+        Directory.CreateDirectory(tempPath);
+        var destination = Path.Combine(tempPath, "yaml-escaping");
+
+        await new DendenExportService().ExportAsync(
+            CreateDocument(),
+            new DendenExportOptions("題名:\n\"引用\"", "著者\\名\t補記", Language: " "),
+            destination,
+            CancellationToken.None);
+
+        var yaml = await File.ReadAllTextAsync(Path.Combine(destination, "ddconv.yml"));
+        Assert.Contains("content: \"題名:\\n\\\"引用\\\"\"", yaml, StringComparison.Ordinal);
+        Assert.Contains("content: \"著者\\\\名\\t補記\"", yaml, StringComparison.Ordinal);
+        Assert.DoesNotContain("題名:\n", yaml, StringComparison.Ordinal);
+        Assert.Contains("language: \"ja\"", yaml, StringComparison.Ordinal);
     }
 
     [Fact]
@@ -153,9 +285,13 @@ public sealed class RubyPackageAndExportTests : IDisposable
         var cover = Path.Combine(tempPath, "selected-cover.jpeg");
         var firstIllustration = Path.Combine(tempPath, "scene-b.png");
         var secondIllustration = Path.Combine(tempPath, "scene-a.jpg");
-        await File.WriteAllBytesAsync(cover, [1, 2, 3]);
-        await File.WriteAllBytesAsync(firstIllustration, [4, 5]);
-        await File.WriteAllBytesAsync(secondIllustration, [6, 7]);
+        var thirdIllustration = Path.Combine(tempPath, "scene-c.gif");
+        WriteArtificialImage(cover, new Scalar(10, 20, 30));
+        WriteArtificialImage(firstIllustration, new Scalar(40, 50, 60));
+        WriteArtificialImage(secondIllustration, new Scalar(70, 80, 90));
+        await File.WriteAllBytesAsync(
+            thirdIllustration,
+            Convert.FromBase64String("R0lGODlhAQABAIAAAAAAAP///ywAAAAAAQABAAACAUwAOw=="));
         var destination = Path.Combine(tempPath, "with-images");
 
         await new DendenExportService().ExportAsync(
@@ -164,22 +300,290 @@ public sealed class RubyPackageAndExportTests : IDisposable
                 "書名",
                 "著者",
                 CoverImagePath: cover,
-                IllustrationImagePaths: [firstIllustration, secondIllustration]),
+                IllustrationImagePaths: [firstIllustration, secondIllustration, thirdIllustration]),
             destination,
             CancellationToken.None);
 
         Assert.Equal(
-            new byte[] { 1, 2, 3 },
+            await File.ReadAllBytesAsync(cover),
             await File.ReadAllBytesAsync(Path.Combine(destination, "cover.jpg")));
         Assert.Equal(
-            new byte[] { 4, 5 },
-            await File.ReadAllBytesAsync(Path.Combine(
-                destination, "images", "illustration-001.png")));
+            await File.ReadAllBytesAsync(firstIllustration),
+            await File.ReadAllBytesAsync(Path.Combine(destination, "illustration-001.png")));
         Assert.Equal(
-            new byte[] { 6, 7 },
-            await File.ReadAllBytesAsync(Path.Combine(
-                destination, "images", "illustration-002.jpg")));
-        Assert.Equal(2, Directory.GetFiles(Path.Combine(destination, "images")).Length);
+            await File.ReadAllBytesAsync(secondIllustration),
+            await File.ReadAllBytesAsync(Path.Combine(destination, "illustration-002.jpg")));
+        Assert.Equal(
+            await File.ReadAllBytesAsync(thirdIllustration),
+            await File.ReadAllBytesAsync(Path.Combine(destination, "illustration-003.gif")));
+        Assert.False(Directory.Exists(Path.Combine(destination, "images")));
+        var markdown = await File.ReadAllTextAsync(Path.Combine(destination, "book.md"));
+        Assert.Contains("![挿絵 1](illustration-001.png)", markdown, StringComparison.Ordinal);
+        Assert.Contains("![挿絵 2](illustration-002.jpg)", markdown, StringComparison.Ordinal);
+        Assert.Contains("![挿絵 3](illustration-003.gif)", markdown, StringComparison.Ordinal);
+        Assert.Contains("Markdownと画像をまとめて選択", await File.ReadAllTextAsync(
+            Path.Combine(destination, "README.txt")), StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task Denden_converts_webp_cover_to_png_and_matches_file_signature()
+    {
+        Directory.CreateDirectory(tempPath);
+        var cover = Path.Combine(tempPath, "cover.webp");
+        WriteArtificialImage(cover, new Scalar(20, 40, 60));
+        var destination = Path.Combine(tempPath, "converted-cover");
+
+        await new DendenExportService().ExportAsync(
+            CreateDocument(),
+            new DendenExportOptions("書名", "著者", CoverImagePath: cover),
+            destination,
+            CancellationToken.None);
+
+        var bytes = await File.ReadAllBytesAsync(Path.Combine(destination, "cover.png"));
+        Assert.Equal(new byte[] { 0x89, 0x50, 0x4e, 0x47 }, bytes[..4]);
+        Assert.False(File.Exists(Path.Combine(destination, "cover.jpg")));
+    }
+
+    [Theory]
+    [InlineData("broken.png", "iVBORw0KGgo=")]
+    [InlineData("broken.jpg", "/9j/")]
+    [InlineData("broken.gif", "R0lGODlh")]
+    public async Task Denden_rejects_truncated_supported_images_before_creating_destination(
+        string fileName,
+        string base64)
+    {
+        Directory.CreateDirectory(tempPath);
+        var cover = Path.Combine(tempPath, fileName);
+        await File.WriteAllBytesAsync(cover, Convert.FromBase64String(base64));
+        var destination = Path.Combine(tempPath, $"invalid-{Path.GetExtension(fileName)[1..]}");
+
+        await Assert.ThrowsAsync<InvalidDataException>(() =>
+            new DendenExportService().ExportAsync(
+                CreateDocument(),
+                new DendenExportOptions("書名", "著者", CoverImagePath: cover),
+                destination,
+                CancellationToken.None));
+
+        Assert.False(Directory.Exists(destination));
+    }
+
+    [Fact]
+    public async Task Denden_rejects_a_header_complete_but_undecodable_gif()
+    {
+        Directory.CreateDirectory(tempPath);
+        var cover = Path.Combine(tempPath, "spoofed.gif");
+        await File.WriteAllBytesAsync(
+            cover,
+            [
+                .. "GIF89a"u8.ToArray(),
+                0x01, 0x00, 0x01, 0x00, 0x00, 0x00, 0x00,
+                0x2c, 0x00, 0x3b,
+            ]);
+        var destination = Path.Combine(tempPath, "spoofed-gif");
+
+        await Assert.ThrowsAsync<InvalidDataException>(() =>
+            new DendenExportService().ExportAsync(
+                CreateDocument(),
+                new DendenExportOptions("書名", "著者", CoverImagePath: cover),
+                destination,
+                CancellationToken.None));
+
+        Assert.False(Directory.Exists(destination));
+    }
+
+    [Fact]
+    public async Task Denden_rejects_more_than_one_hundred_output_files_before_creation()
+    {
+        Directory.CreateDirectory(tempPath);
+        var illustration = Path.Combine(tempPath, "illustration.png");
+        WriteArtificialImage(illustration, new Scalar(1, 2, 3));
+        var destination = Path.Combine(tempPath, "too-many-files");
+
+        var error = await Assert.ThrowsAsync<InvalidOperationException>(() =>
+            new DendenExportService().ExportAsync(
+                CreateDocument(),
+                new DendenExportOptions(
+                    "書名",
+                    "著者",
+                    IllustrationImagePaths: Enumerable.Repeat(illustration, 97).ToArray()),
+                destination,
+                CancellationToken.None));
+
+        Assert.Contains("100", error.Message, StringComparison.Ordinal);
+        Assert.False(Directory.Exists(destination));
+    }
+
+    [Fact]
+    public async Task Denden_rejects_an_output_image_larger_than_three_mebibytes()
+    {
+        Directory.CreateDirectory(tempPath);
+        var oversized = Path.Combine(tempPath, "oversized.png");
+        using (var image = new Mat(1600, 1600, MatType.CV_8UC3))
+        {
+            Cv2.Randu(image, Scalar.All(0), Scalar.All(256));
+            Assert.True(Cv2.ImWrite(oversized, image));
+        }
+        Assert.True(new FileInfo(oversized).Length > 3 * 1024 * 1024);
+        var destination = Path.Combine(tempPath, "oversized-output");
+
+        var error = await Assert.ThrowsAsync<InvalidOperationException>(() =>
+            new DendenExportService().ExportAsync(
+                CreateDocument(),
+                new DendenExportOptions("書名", "著者", CoverImagePath: oversized),
+                destination,
+                CancellationToken.None));
+
+        Assert.Contains("cover.png", error.Message, StringComparison.Ordinal);
+        Assert.Contains("MB", error.Message, StringComparison.Ordinal);
+        Assert.False(Directory.Exists(destination));
+    }
+
+    [Fact]
+    public async Task Denden_ordered_blocks_place_an_illustration_after_a_joined_paragraph()
+    {
+        Directory.CreateDirectory(tempPath);
+        var image = Path.Combine(tempPath, "joined-illustration.png");
+        WriteArtificialImage(image, new Scalar(12, 34, 56));
+        var firstPage = Guid.NewGuid();
+        var laterPage = Guid.NewGuid();
+        var text = "前ページから次ページまで続く本文";
+        var paragraph = new StructuredParagraph(
+            Guid.NewGuid(),
+            DocumentElementRole.BodyParagraph,
+            [new TextInline(text)],
+            DocumentTextHash.Compute(text),
+            [
+                new SourceSpan(firstPage, "0001", 0, 6),
+                new SourceSpan(laterPage, "0003", 6, text.Length - 6),
+            ]);
+        var draft = new StructuredDocument(Guid.NewGuid(), [paragraph], string.Empty);
+        var document = draft with { DocumentTextHash = DocumentTextHash.Compute(draft) };
+        var illustration = new DendenIllustration(
+            Guid.NewGuid(), 2, image, "挿絵 1", "場面");
+        var export = new DendenExportDocument(
+            document,
+            [
+                new DendenParagraphBlock(paragraph),
+                new DendenIllustrationBlock(illustration, PlacementAdjusted: true),
+            ]);
+        var destination = Path.Combine(tempPath, "ordered-blocks");
+
+        await new DendenExportService().ExportAsync(
+            export,
+            new DendenExportOptions("書名", "著者"),
+            destination,
+            CancellationToken.None);
+
+        var markdown = await File.ReadAllTextAsync(Path.Combine(destination, "book.md"));
+        var paragraphPosition = markdown.IndexOf(text, StringComparison.Ordinal);
+        var imagePosition = markdown.IndexOf("![挿絵 1](illustration-001.png)", StringComparison.Ordinal);
+        Assert.True(paragraphPosition >= 0 && imagePosition > paragraphPosition);
+        Assert.Contains("場面", markdown, StringComparison.Ordinal);
+        Assert.Single(export.Warnings);
+        Assert.Equal("IllustrationPlacementAdjusted", export.Warnings[0].Code);
+    }
+
+    [Fact]
+    public async Task Denden_uses_official_figure_markup_when_illustration_list_is_enabled()
+    {
+        Directory.CreateDirectory(tempPath);
+        var image = Path.Combine(tempPath, "figure.png");
+        WriteArtificialImage(image, new Scalar(12, 34, 56));
+        var document = CreateDocument();
+        var illustration = new DendenIllustration(
+            Guid.NewGuid(), 1, image, "挿絵 1", "図1. 場面");
+        var export = new DendenExportDocument(
+            document,
+            [
+                new DendenParagraphBlock(document.Paragraphs[0]),
+                new DendenIllustrationBlock(illustration),
+            ]);
+        var destination = Path.Combine(tempPath, "figure-list");
+
+        await new DendenExportService().ExportAsync(
+            export,
+            new DendenExportOptions("書名", "著者", DisplayIllustrationList: true),
+            destination,
+            CancellationToken.None);
+
+        var markdown = await File.ReadAllTextAsync(Path.Combine(destination, "book.md"));
+        Assert.Contains("<figure class=\"illustration\">", markdown, StringComparison.Ordinal);
+        Assert.Contains("<img src=\"illustration-001.png\" alt=\"挿絵 1\">", markdown, StringComparison.Ordinal);
+        Assert.Contains("<figcaption>図1. 場面</figcaption>", markdown, StringComparison.Ordinal);
+        Assert.Contains("</figure>", markdown, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task Denden_rejects_an_empty_split_export_before_creating_destination()
+    {
+        Directory.CreateDirectory(tempPath);
+        var draft = new StructuredDocument(Guid.NewGuid(), [], string.Empty);
+        var document = draft with { DocumentTextHash = DocumentTextHash.Compute(draft) };
+        var destination = Path.Combine(tempPath, "empty-split");
+
+        var error = await Assert.ThrowsAsync<InvalidOperationException>(() =>
+            new DendenExportService().ExportAsync(
+                document,
+                new DendenExportOptions("書名", "著者", SplitByChapter: true),
+                destination,
+                CancellationToken.None));
+
+        Assert.Contains("Markdown", error.Message, StringComparison.Ordinal);
+        Assert.False(Directory.Exists(destination));
+    }
+
+    [Fact]
+    public void Denden_inspection_reports_fatal_validation_without_throwing()
+    {
+        var draft = new StructuredDocument(Guid.NewGuid(), [], string.Empty);
+        var document = draft with { DocumentTextHash = DocumentTextHash.Compute(draft) };
+        var export = new DendenExportDocument(document, []);
+
+        var issues = new DendenExportService().Inspect(
+            export,
+            new DendenExportOptions("書名", "著者", SplitByChapter: true));
+
+        var issue = Assert.Single(issues);
+        Assert.True(issue.IsFatal);
+        Assert.Equal("DendenValidationFailed", issue.Code);
+        Assert.Contains("Markdown", issue.Message, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Denden_assembler_uses_page_order_without_splitting_a_cross_page_paragraph()
+    {
+        var firstPage = Guid.NewGuid();
+        var illustrationPage = Guid.NewGuid();
+        var thirdPage = Guid.NewGuid();
+        var text = "連結された本文";
+        var paragraph = new StructuredParagraph(
+            Guid.NewGuid(),
+            DocumentElementRole.BodyParagraph,
+            [new TextInline(text)],
+            DocumentTextHash.Compute(text),
+            [
+                new SourceSpan(firstPage, "0001", 0, 3),
+                new SourceSpan(thirdPage, "0003", 3, text.Length - 3),
+            ]);
+        var draft = new StructuredDocument(Guid.NewGuid(), [paragraph], string.Empty);
+        var document = draft with { DocumentTextHash = DocumentTextHash.Compute(draft) };
+        var illustration = new DendenIllustration(
+            illustrationPage, 2, "illustration.png", "挿絵 1");
+
+        var export = DendenDocumentAssembler.Assemble(
+            document,
+            new Dictionary<Guid, int>
+            {
+                [firstPage] = 1,
+                [illustrationPage] = 2,
+                [thirdPage] = 3,
+            },
+            [illustration]);
+
+        Assert.Collection(
+            export.Blocks,
+            block => Assert.IsType<DendenParagraphBlock>(block),
+            block => Assert.True(Assert.IsType<DendenIllustrationBlock>(block).PlacementAdjusted));
     }
 
     [Fact]
@@ -213,7 +617,7 @@ public sealed class RubyPackageAndExportTests : IDisposable
             new DendenExportOptions("書名", "著者", SplitByChapter: true),
             destination, CancellationToken.None);
 
-        Assert.Equal(string.Empty, await File.ReadAllTextAsync(Path.Combine(destination, "book.md")));
+        Assert.False(File.Exists(Path.Combine(destination, "book.md")));
         var firstChapter = await File.ReadAllTextAsync(Path.Combine(destination, "chapter-001.md"));
         Assert.Contains("# 第一章", firstChapter, StringComparison.Ordinal);
         Assert.Contains("{八角|やすみ}と{八角|はっかく}", firstChapter, StringComparison.Ordinal);
@@ -274,6 +678,12 @@ public sealed class RubyPackageAndExportTests : IDisposable
         var count = 0;
         for (var start = 0; (start = value.IndexOf(fragment, start, StringComparison.Ordinal)) >= 0; start += fragment.Length) count++;
         return count;
+    }
+
+    private static void WriteArtificialImage(string path, Scalar color)
+    {
+        using var image = new Mat(8, 8, MatType.CV_8UC3, color);
+        Assert.True(Cv2.ImWrite(path, image));
     }
 
     public void Dispose()

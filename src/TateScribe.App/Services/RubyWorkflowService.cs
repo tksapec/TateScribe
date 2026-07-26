@@ -51,11 +51,8 @@ public sealed class RubyWorkflowService
                 page.SourcePath, cacheDirectory, page.Crop ?? NormalizedCrop.Full,
                 page.RotationDegrees, cancellationToken)).CachePath;
             packagePages.Add(new RubyPackagePage(page.Id, marker, page.SourcePath, cropped));
-            var state = await repository.LoadPageTextStateAsync(page.Id, cancellationToken);
-            var adjacent = state.SelectForProofreading().Text;
             candidates.AddRange(RubyOcrCandidateSelector.Select(
                 marker,
-                adjacent,
                 await repository.LoadLatestOcrWordStatesAsync(page.Id, cancellationToken)));
         }
         var batchId = Guid.NewGuid();
@@ -136,7 +133,7 @@ public sealed class RubyWorkflowService
         var unresolved = await repository.LoadRubyUnresolvedItemsAsync(batchId.Value, cancellationToken);
         var import = new RubyImportDocument(1, batch.Document.ProjectId, batch.BatchId,
             batch.Document.DocumentTextHash, annotations, unresolved);
-        return new RubyImportResult(batch, new RubyImportPreview(import, []));
+        return new RubyImportResult(batch, ValidateReviewed(batch, import));
     }
 
     public async Task SaveReviewAsync(
