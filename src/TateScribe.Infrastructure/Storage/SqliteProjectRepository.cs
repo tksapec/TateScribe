@@ -4,13 +4,22 @@ using TateScribe.Core.Projects;
 using TateScribe.Core.Images;
 using TateScribe.Core.Layout;
 using TateScribe.Core.Proofreading;
+using TateScribe.Core.Ruby;
 using System.Security.Cryptography;
 using System.Text;
+using System.Globalization;
 
 namespace TateScribe.Infrastructure.Storage;
 
 public sealed class SqliteProjectRepository : IAsyncDisposable
 {
+    private enum PageStructureChange
+    {
+        Unchanged,
+        Added,
+        Changed,
+    }
+
     private readonly SqliteConnection _connection;
 
     private SqliteProjectRepository(SqliteConnection connection) => _connection = connection;
@@ -24,17 +33,32 @@ public sealed class SqliteProjectRepository : IAsyncDisposable
             ForeignKeys = true,
             Pooling = false
         }.ToString());
-        await connection.OpenAsync(cancellationToken);
-        var repository = new SqliteProjectRepository(connection);
-        await repository.InitializeAsync(cancellationToken);
-        return repository;
+        try
+        {
+            await connection.OpenAsync(cancellationToken);
+            var repository = new SqliteProjectRepository(connection);
+            await repository.InitializeAsync(cancellationToken);
+            return repository;
+        }
+        catch
+        {
+            await connection.DisposeAsync();
+            throw;
+        }
     }
 
     public async Task SavePagesAsync(IReadOnlyList<ProjectPage> pages, CancellationToken cancellationToken)
     {
         await using var transaction = _connection.BeginTransaction();
+        var documentStructureChanged = false;
         foreach (var page in pages)
         {
+            var structureChange = await GetStructuralPageChangeAsync(
+                transaction, page, cancellationToken);
+            documentStructureChanged |= structureChange == PageStructureChange.Changed
+                || (structureChange == PageStructureChange.Added
+                    && page.IsIncluded
+                    && page.PageRole is not (PageRole.Illustration or PageRole.Blank));
             var command = _connection.CreateCommand();
             command.Transaction = transaction;
             command.CommandText = """
@@ -67,7 +91,97 @@ public sealed class SqliteProjectRepository : IAsyncDisposable
             command.Parameters.AddWithValue("$joinType", page.BoundaryJoinType.ToString());
             await command.ExecuteNonQueryAsync(cancellationToken);
         }
+        if (documentStructureChanged)
+            await MarkAllRubyStructureStaleAsync(transaction, cancellationToken);
         await transaction.CommitAsync(cancellationToken);
+    }
+
+    private async Task<PageStructureChange> GetStructuralPageChangeAsync(
+        SqliteTransaction transaction,
+        ProjectPage page,
+        CancellationToken cancellationToken)
+    {
+        var command = _connection.CreateCommand();
+        command.Transaction = transaction;
+        command.CommandText = """
+            SELECT source_path, source_hash, sort_order, included, rotation_degrees,
+                   crop_left, crop_top, crop_right, crop_bottom, display_profile, page_role
+            FROM pages WHERE id = $id;
+            """;
+        command.Parameters.AddWithValue("$id", page.Id.ToString("D"));
+        await using var reader = await command.ExecuteReaderAsync(cancellationToken);
+        if (!await reader.ReadAsync(cancellationToken)) return PageStructureChange.Added;
+        var crop = page.Crop ?? NormalizedCrop.Full;
+        var changed = !string.Equals(reader.GetString(0), page.SourcePath, StringComparison.Ordinal)
+            || !string.Equals(reader.GetString(1), page.SourceHash, StringComparison.Ordinal)
+            || reader.GetInt32(2) != page.SortOrder
+            || (reader.GetInt32(3) != 0) != page.IsIncluded
+            || reader.GetInt32(4) != page.RotationDegrees
+            || reader.GetDouble(5) != crop.Left
+            || reader.GetDouble(6) != crop.Top
+            || reader.GetDouble(7) != crop.Right
+            || reader.GetDouble(8) != crop.Bottom
+            || !string.Equals(reader.GetString(9), page.DisplayProfile.ToString(), StringComparison.Ordinal)
+            || !string.Equals(reader.GetString(10), page.PageRole.ToString(), StringComparison.Ordinal);
+        return changed ? PageStructureChange.Changed : PageStructureChange.Unchanged;
+    }
+
+    private async Task MarkAllRubyStructureStaleAsync(
+        SqliteTransaction transaction,
+        CancellationToken cancellationToken)
+    {
+        var command = _connection.CreateCommand();
+        command.Transaction = transaction;
+        command.CommandText = """
+            INSERT INTO ruby_annotation_history
+                (annotation_id, paragraph_id, start_offset, length, base_text, reading, source,
+                 confidence, evidence, status, batch_id, recorded_utc)
+            SELECT id, paragraph_id, start_offset, length, base_text, reading, source,
+                   confidence, evidence, status, batch_id, $utc
+            FROM ruby_annotations
+            WHERE status IN ('Proposed', 'Confirmed');
+            UPDATE ruby_annotations
+            SET status = 'Stale', updated_utc = $utc
+            WHERE status IN ('Proposed', 'Confirmed');
+            UPDATE ruby_batches SET confirmed_text_stale = 1
+            WHERE confirmed_text_stale = 0;
+            """;
+        command.Parameters.AddWithValue("$utc", DateTimeOffset.UtcNow.ToString("O"));
+        await command.ExecuteNonQueryAsync(cancellationToken);
+    }
+
+    private async Task MarkRubyStructureStaleAsync(
+        SqliteTransaction transaction,
+        Guid pageId,
+        CancellationToken cancellationToken)
+    {
+        var command = _connection.CreateCommand();
+        command.Transaction = transaction;
+        command.CommandText = """
+            INSERT INTO ruby_annotation_history
+                (annotation_id, paragraph_id, start_offset, length, base_text, reading, source,
+                 confidence, evidence, status, batch_id, recorded_utc)
+            SELECT id, paragraph_id, start_offset, length, base_text, reading, source,
+                   confidence, evidence, status, batch_id, $utc
+            FROM ruby_annotations
+            WHERE status IN ('Proposed', 'Confirmed')
+              AND batch_id IN (
+                SELECT batch_id FROM ruby_batch_pages WHERE page_id = $pageId
+              );
+            UPDATE ruby_annotations
+            SET status = 'Stale', updated_utc = $utc
+            WHERE status IN ('Proposed', 'Confirmed')
+              AND batch_id IN (
+                SELECT batch_id FROM ruby_batch_pages WHERE page_id = $pageId
+              );
+            UPDATE ruby_batches SET confirmed_text_stale = 1
+            WHERE id IN (
+                SELECT batch_id FROM ruby_batch_pages WHERE page_id = $pageId
+            );
+            """;
+        command.Parameters.AddWithValue("$pageId", pageId.ToString("D"));
+        command.Parameters.AddWithValue("$utc", DateTimeOffset.UtcNow.ToString("O"));
+        await command.ExecuteNonQueryAsync(cancellationToken);
     }
 
     public async Task<IReadOnlyList<ProjectPage>> LoadPagesAsync(CancellationToken cancellationToken)
@@ -124,6 +238,8 @@ public sealed class SqliteProjectRepository : IAsyncDisposable
 
     public async Task SaveManualTextAsync(Guid pageId, string text, CancellationToken cancellationToken)
     {
+        var previousText = (await LoadPageTextStateAsync(pageId, cancellationToken)).SelectForProofreading().Text;
+        var bodyChanged = !string.Equals(previousText, text, StringComparison.Ordinal);
         await using var transaction = _connection.BeginTransaction();
         var command = _connection.CreateCommand();
         command.Transaction = transaction;
@@ -133,6 +249,40 @@ public sealed class SqliteProjectRepository : IAsyncDisposable
         command.Parameters.AddWithValue("$utc", DateTimeOffset.UtcNow.ToString("O"));
         await command.ExecuteNonQueryAsync(cancellationToken);
         await AppendTextVersionIfChangedAsync(transaction, pageId, "Manual", text, "ManualEdit", null, cancellationToken);
+        if (bodyChanged)
+        {
+            var staleRuby = _connection.CreateCommand();
+            staleRuby.Transaction = transaction;
+            staleRuby.CommandText = """
+                INSERT INTO ruby_annotation_history
+                    (annotation_id, paragraph_id, start_offset, length, base_text, reading, source,
+                     confidence, evidence, status, batch_id, recorded_utc)
+                SELECT id, paragraph_id, start_offset, length, base_text, reading, source,
+                       confidence, evidence, status, batch_id, $utc
+                FROM ruby_annotations
+                WHERE status IN ('Proposed', 'Confirmed')
+                  AND paragraph_id IN (
+                    SELECT paragraph_id FROM document_paragraph_source_spans WHERE page_id = $pageId
+                  );
+                UPDATE ruby_annotations
+                SET status = 'Stale', updated_utc = $utc
+                WHERE status IN ('Proposed', 'Confirmed')
+                  AND paragraph_id IN (
+                    SELECT paragraph_id FROM document_paragraph_source_spans WHERE page_id = $pageId
+                  );
+                """;
+            staleRuby.Parameters.AddWithValue("$pageId", pageId.ToString("D"));
+            staleRuby.Parameters.AddWithValue("$utc", DateTimeOffset.UtcNow.ToString("O"));
+            await staleRuby.ExecuteNonQueryAsync(cancellationToken);
+            var staleBatches = _connection.CreateCommand();
+            staleBatches.Transaction = transaction;
+            staleBatches.CommandText = """
+                UPDATE ruby_batches SET confirmed_text_stale = 1
+                WHERE id IN (SELECT batch_id FROM ruby_batch_pages WHERE page_id = $pageId);
+                """;
+            staleBatches.Parameters.AddWithValue("$pageId", pageId.ToString("D"));
+            await staleBatches.ExecuteNonQueryAsync(cancellationToken);
+        }
         await UpdateProofreadingStatusAsync(transaction, pageId, ProofreadingStatus.ManuallyEdited, cancellationToken);
         await transaction.CommitAsync(cancellationToken);
     }
@@ -154,6 +304,8 @@ public sealed class SqliteProjectRepository : IAsyncDisposable
         PageTextVersion version,
         CancellationToken cancellationToken)
     {
+        var previousText = (await LoadPageTextStateAsync(
+            version.PageId, cancellationToken)).SelectForProofreading().Text;
         var latestOcrRunId = version.Kind == "Confirmed"
             ? await GetLatestPaddleRunIdAsync(version.PageId, cancellationToken)
             : null;
@@ -186,6 +338,8 @@ public sealed class SqliteProjectRepository : IAsyncDisposable
         {
             throw new InvalidOperationException($"Unsupported text version kind: {version.Kind}");
         }
+        if (!string.Equals(previousText, version.Text, StringComparison.Ordinal))
+            await MarkRubyStructureStaleAsync(transaction, version.PageId, cancellationToken);
         await transaction.CommitAsync(cancellationToken);
     }
 
@@ -194,6 +348,790 @@ public sealed class SqliteProjectRepository : IAsyncDisposable
         var command = _connection.CreateCommand();
         command.CommandText = "SELECT version FROM schema_version LIMIT 1;";
         return Convert.ToInt32(await command.ExecuteScalarAsync(cancellationToken), System.Globalization.CultureInfo.InvariantCulture);
+    }
+
+    public async Task<Guid> SaveDocumentSnapshotAsync(
+        StructuredDocument document,
+        string sourceTextVersion,
+        CancellationToken cancellationToken)
+    {
+        var snapshotId = Guid.NewGuid();
+        await using var transaction = _connection.BeginTransaction();
+        var existing = _connection.CreateCommand();
+        existing.Transaction = transaction;
+        existing.CommandText = """
+            SELECT id FROM document_snapshots
+            WHERE project_id = $projectId AND document_text_hash = $hash
+            ORDER BY created_utc DESC LIMIT 1;
+            """;
+        existing.Parameters.AddWithValue("$projectId", document.ProjectId.ToString("D"));
+        existing.Parameters.AddWithValue("$hash", document.DocumentTextHash);
+        var existingValue = await existing.ExecuteScalarAsync(cancellationToken) as string;
+        if (Guid.TryParse(existingValue, out var existingId))
+        {
+            await transaction.RollbackAsync(cancellationToken);
+            return existingId;
+        }
+
+        var insertSnapshot = _connection.CreateCommand();
+        insertSnapshot.Transaction = transaction;
+        insertSnapshot.CommandText = """
+            INSERT INTO document_snapshots (id, project_id, document_text_hash, created_utc, source_text_version)
+            VALUES ($id, $projectId, $hash, $utc, $source);
+            """;
+        insertSnapshot.Parameters.AddWithValue("$id", snapshotId.ToString("D"));
+        insertSnapshot.Parameters.AddWithValue("$projectId", document.ProjectId.ToString("D"));
+        insertSnapshot.Parameters.AddWithValue("$hash", document.DocumentTextHash);
+        insertSnapshot.Parameters.AddWithValue("$utc", DateTimeOffset.UtcNow.ToString("O"));
+        insertSnapshot.Parameters.AddWithValue("$source", sourceTextVersion);
+        await insertSnapshot.ExecuteNonQueryAsync(cancellationToken);
+
+        for (var ordinal = 0; ordinal < document.Paragraphs.Count; ordinal++)
+        {
+            var paragraph = document.Paragraphs[ordinal];
+            var insertParagraph = _connection.CreateCommand();
+            insertParagraph.Transaction = transaction;
+            insertParagraph.CommandText = """
+                INSERT INTO document_paragraphs (id, snapshot_id, ordinal, role, plain_text, text_hash, logical_key)
+                VALUES ($id, $snapshotId, $ordinal, $role, $text, $hash, $logicalKey);
+                """;
+            insertParagraph.Parameters.AddWithValue("$id", paragraph.ParagraphId.ToString("D"));
+            insertParagraph.Parameters.AddWithValue("$snapshotId", snapshotId.ToString("D"));
+            insertParagraph.Parameters.AddWithValue("$ordinal", ordinal);
+            insertParagraph.Parameters.AddWithValue("$role", paragraph.Role.ToString());
+            insertParagraph.Parameters.AddWithValue("$text", paragraph.PlainText);
+            insertParagraph.Parameters.AddWithValue("$hash", paragraph.TextHash);
+            insertParagraph.Parameters.AddWithValue("$logicalKey", paragraph.LogicalKey);
+            await insertParagraph.ExecuteNonQueryAsync(cancellationToken);
+
+            for (var spanOrdinal = 0; spanOrdinal < paragraph.SourceSpans.Count; spanOrdinal++)
+            {
+                var span = paragraph.SourceSpans[spanOrdinal];
+                var insertSpan = _connection.CreateCommand();
+                insertSpan.Transaction = transaction;
+                insertSpan.CommandText = """
+                    INSERT INTO document_paragraph_source_spans
+                        (snapshot_id, paragraph_id, ordinal, page_id, page_marker, start_offset, length)
+                    VALUES ($snapshotId, $paragraphId, $ordinal, $pageId, $marker, $start, $length);
+                    """;
+                insertSpan.Parameters.AddWithValue("$snapshotId", snapshotId.ToString("D"));
+                insertSpan.Parameters.AddWithValue("$paragraphId", paragraph.ParagraphId.ToString("D"));
+                insertSpan.Parameters.AddWithValue("$ordinal", spanOrdinal);
+                insertSpan.Parameters.AddWithValue("$pageId", span.PageId.ToString("D"));
+                insertSpan.Parameters.AddWithValue("$marker", span.PageMarker);
+                insertSpan.Parameters.AddWithValue("$start", span.Start);
+                insertSpan.Parameters.AddWithValue("$length", span.Length);
+                await insertSpan.ExecuteNonQueryAsync(cancellationToken);
+            }
+        }
+        await transaction.CommitAsync(cancellationToken);
+        return snapshotId;
+    }
+
+    public async Task<Guid?> FindStableParagraphIdAsync(
+        Guid projectId,
+        string logicalKey,
+        CancellationToken cancellationToken)
+    {
+        var command = _connection.CreateCommand();
+        command.CommandText = """
+            SELECT p.id
+            FROM document_paragraphs p
+            JOIN document_snapshots s ON s.id = p.snapshot_id
+            WHERE s.project_id = $projectId AND p.logical_key = $logicalKey
+            ORDER BY s.created_utc DESC LIMIT 1;
+            """;
+        command.Parameters.AddWithValue("$projectId", projectId.ToString("D"));
+        command.Parameters.AddWithValue("$logicalKey", logicalKey);
+        return Guid.TryParse(await command.ExecuteScalarAsync(cancellationToken) as string, out var id) ? id : null;
+    }
+
+    public async Task SaveRubyImportAsync(
+        Guid snapshotId,
+        RubyPolicy policy,
+        RubyImportDocument import,
+        CancellationToken cancellationToken)
+    {
+        await using var transaction = _connection.BeginTransaction();
+        var batch = _connection.CreateCommand();
+        batch.Transaction = transaction;
+        batch.CommandText = """
+            INSERT INTO ruby_batches (id, project_id, document_snapshot_id, ruby_policy, exported_utc)
+            VALUES ($id, $projectId, $snapshotId, $policy, $utc)
+            ON CONFLICT(id) DO NOTHING;
+            """;
+        batch.Parameters.AddWithValue("$id", import.BatchId.ToString("D"));
+        batch.Parameters.AddWithValue("$projectId", import.ProjectId.ToString("D"));
+        batch.Parameters.AddWithValue("$snapshotId", snapshotId.ToString("D"));
+        batch.Parameters.AddWithValue("$policy", policy.ToString());
+        batch.Parameters.AddWithValue("$utc", DateTimeOffset.UtcNow.ToString("O"));
+        await batch.ExecuteNonQueryAsync(cancellationToken);
+
+        foreach (var item in import.Annotations)
+        {
+            var id = item.AnnotationId == Guid.Empty ? Guid.NewGuid() : item.AnnotationId;
+            var annotation = _connection.CreateCommand();
+            annotation.Transaction = transaction;
+            annotation.CommandText = """
+                INSERT INTO ruby_annotations
+                    (id, paragraph_id, start_offset, length, base_text, reading, source, confidence,
+                     evidence, status, batch_id, created_utc, updated_utc)
+                VALUES ($id, $paragraphId, $start, $length, $baseText, $reading, $source, $confidence,
+                        $evidence, $status, $batchId, $utc, $utc)
+                ON CONFLICT(batch_id, paragraph_id, start_offset, length, reading) DO NOTHING;
+                """;
+            annotation.Parameters.AddWithValue("$id", id.ToString("D"));
+            annotation.Parameters.AddWithValue("$paragraphId", item.ParagraphId);
+            annotation.Parameters.AddWithValue("$start", item.Start);
+            annotation.Parameters.AddWithValue("$length", item.Length);
+            annotation.Parameters.AddWithValue("$baseText", item.BaseText);
+            annotation.Parameters.AddWithValue("$reading", item.Reading);
+            annotation.Parameters.AddWithValue("$source", item.Source.ToString());
+            annotation.Parameters.AddWithValue("$confidence", item.Confidence);
+            annotation.Parameters.AddWithValue("$evidence", item.Evidence);
+            annotation.Parameters.AddWithValue("$status", item.Status.ToString());
+            annotation.Parameters.AddWithValue("$batchId", import.BatchId.ToString("D"));
+            annotation.Parameters.AddWithValue("$utc", DateTimeOffset.UtcNow.ToString("O"));
+            await annotation.ExecuteNonQueryAsync(cancellationToken);
+            var persistedAnnotation = _connection.CreateCommand();
+            persistedAnnotation.Transaction = transaction;
+            persistedAnnotation.CommandText = """
+                SELECT id FROM ruby_annotations
+                WHERE batch_id = $batchId AND paragraph_id = $paragraphId
+                  AND start_offset = $start AND length = $length AND reading = $reading;
+                """;
+            persistedAnnotation.Parameters.AddWithValue("$batchId", import.BatchId.ToString("D"));
+            persistedAnnotation.Parameters.AddWithValue("$paragraphId", item.ParagraphId);
+            persistedAnnotation.Parameters.AddWithValue("$start", item.Start);
+            persistedAnnotation.Parameters.AddWithValue("$length", item.Length);
+            persistedAnnotation.Parameters.AddWithValue("$reading", item.Reading);
+            id = Guid.Parse((string)(await persistedAnnotation.ExecuteScalarAsync(cancellationToken)
+                ?? throw new InvalidDataException("Ruby annotation could not be persisted.")));
+            var reconcile = _connection.CreateCommand();
+            reconcile.Transaction = transaction;
+            reconcile.CommandText = """
+                INSERT INTO ruby_annotation_history
+                    (annotation_id, paragraph_id, start_offset, length, base_text, reading, source,
+                     confidence, evidence, status, batch_id, recorded_utc)
+                SELECT id, paragraph_id, start_offset, length, base_text, reading, source,
+                       confidence, evidence, status, batch_id, $utc
+                FROM ruby_annotations
+                WHERE id = $id AND (
+                    base_text <> $baseText OR source <> $source
+                    OR confidence <> $confidence OR evidence <> $evidence OR status <> $status
+                );
+                UPDATE ruby_annotations
+                SET base_text = $baseText, source = $source, confidence = $confidence,
+                    evidence = $evidence, status = $status, updated_utc = $utc
+                WHERE id = $id AND (
+                    base_text <> $baseText OR source <> $source
+                    OR confidence <> $confidence OR evidence <> $evidence OR status <> $status
+                );
+                DELETE FROM ruby_annotation_evidence_pages WHERE annotation_id = $id;
+                """;
+            reconcile.Parameters.AddWithValue("$id", id.ToString("D"));
+            reconcile.Parameters.AddWithValue("$baseText", item.BaseText);
+            reconcile.Parameters.AddWithValue("$source", item.Source.ToString());
+            reconcile.Parameters.AddWithValue("$confidence", item.Confidence);
+            reconcile.Parameters.AddWithValue("$evidence", item.Evidence);
+            reconcile.Parameters.AddWithValue("$status", item.Status.ToString());
+            reconcile.Parameters.AddWithValue("$utc", DateTimeOffset.UtcNow.ToString("O"));
+            await reconcile.ExecuteNonQueryAsync(cancellationToken);
+            if (item.Status == RubyAnnotationStatus.Confirmed)
+                await StaleConflictingConfirmedRubyForSnapshotAsync(
+                    transaction,
+                    id,
+                    snapshotId,
+                    item.ParagraphId,
+                    item.Start,
+                    item.Length,
+                    cancellationToken);
+            foreach (var marker in item.EvidencePageMarkers)
+            {
+                var evidence = _connection.CreateCommand();
+                evidence.Transaction = transaction;
+                evidence.CommandText = """
+                    INSERT OR IGNORE INTO ruby_annotation_evidence_pages (annotation_id, page_id, page_marker)
+                    SELECT $annotationId, page_id, page_marker
+                    FROM ruby_batch_pages
+                    WHERE batch_id = $batchId AND page_marker = $marker;
+                    """;
+                evidence.Parameters.AddWithValue("$annotationId", id.ToString("D"));
+                evidence.Parameters.AddWithValue("$batchId", import.BatchId.ToString("D"));
+                evidence.Parameters.AddWithValue("$marker", marker);
+                await evidence.ExecuteNonQueryAsync(cancellationToken);
+            }
+        }
+        foreach (var item in import.Unresolved)
+        {
+            var unresolvedId = Guid.NewGuid();
+            var unresolved = _connection.CreateCommand();
+            unresolved.Transaction = transaction;
+            unresolved.CommandText = """
+                INSERT OR IGNORE INTO ruby_unresolved_items
+                    (id, paragraph_id, start_offset, length, base_text, reason, batch_id)
+                VALUES ($id, $paragraphId, $start, $length, $baseText, $reason, $batchId);
+                """;
+            unresolved.Parameters.AddWithValue("$id", unresolvedId.ToString("D"));
+            unresolved.Parameters.AddWithValue("$paragraphId", item.ParagraphId);
+            unresolved.Parameters.AddWithValue("$start", item.Start);
+            unresolved.Parameters.AddWithValue("$length", item.Length);
+            unresolved.Parameters.AddWithValue("$baseText", item.BaseText);
+            unresolved.Parameters.AddWithValue("$reason", item.Reason);
+            unresolved.Parameters.AddWithValue("$batchId", import.BatchId.ToString("D"));
+            await unresolved.ExecuteNonQueryAsync(cancellationToken);
+            var persistedUnresolved = _connection.CreateCommand();
+            persistedUnresolved.Transaction = transaction;
+            persistedUnresolved.CommandText = """
+                SELECT id FROM ruby_unresolved_items
+                WHERE batch_id = $batchId AND paragraph_id = $paragraphId
+                  AND start_offset = $start AND length = $length
+                  AND base_text = $baseText AND reason = $reason;
+                """;
+            persistedUnresolved.Parameters.AddWithValue("$batchId", import.BatchId.ToString("D"));
+            persistedUnresolved.Parameters.AddWithValue("$paragraphId", item.ParagraphId);
+            persistedUnresolved.Parameters.AddWithValue("$start", item.Start);
+            persistedUnresolved.Parameters.AddWithValue("$length", item.Length);
+            persistedUnresolved.Parameters.AddWithValue("$baseText", item.BaseText);
+            persistedUnresolved.Parameters.AddWithValue("$reason", item.Reason);
+            unresolvedId = Guid.Parse((string)(await persistedUnresolved.ExecuteScalarAsync(cancellationToken)
+                ?? throw new InvalidDataException("Unresolved ruby item could not be persisted.")));
+            foreach (var marker in item.EvidencePageMarkers)
+            {
+                var evidence = _connection.CreateCommand();
+                evidence.Transaction = transaction;
+                evidence.CommandText = """
+                    INSERT OR IGNORE INTO ruby_unresolved_evidence_pages
+                        (unresolved_id, page_id, page_marker)
+                    SELECT $unresolvedId, page_id, page_marker
+                    FROM ruby_batch_pages
+                    WHERE batch_id = $batchId AND page_marker = $marker;
+                    """;
+                evidence.Parameters.AddWithValue("$unresolvedId", unresolvedId.ToString("D"));
+                evidence.Parameters.AddWithValue("$batchId", import.BatchId.ToString("D"));
+                evidence.Parameters.AddWithValue("$marker", marker);
+                await evidence.ExecuteNonQueryAsync(cancellationToken);
+            }
+        }
+        await transaction.CommitAsync(cancellationToken);
+    }
+
+    public async Task RecordRubyBatchAsync(
+        Guid batchId,
+        Guid projectId,
+        Guid snapshotId,
+        RubyPolicy policy,
+        IReadOnlyList<RubyPackagePage> pages,
+        IReadOnlyList<RubyOcrCandidate>? candidates,
+        CancellationToken cancellationToken)
+    {
+        await using var transaction = _connection.BeginTransaction();
+        var batch = _connection.CreateCommand();
+        batch.Transaction = transaction;
+        batch.CommandText = """
+            INSERT INTO ruby_batches (id, project_id, document_snapshot_id, ruby_policy, exported_utc)
+            VALUES ($id, $projectId, $snapshotId, $policy, $utc);
+            """;
+        batch.Parameters.AddWithValue("$id", batchId.ToString("D"));
+        batch.Parameters.AddWithValue("$projectId", projectId.ToString("D"));
+        batch.Parameters.AddWithValue("$snapshotId", snapshotId.ToString("D"));
+        batch.Parameters.AddWithValue("$policy", policy.ToString());
+        batch.Parameters.AddWithValue("$utc", DateTimeOffset.UtcNow.ToString("O"));
+        await batch.ExecuteNonQueryAsync(cancellationToken);
+        foreach (var page in pages)
+        {
+            var insertPage = _connection.CreateCommand();
+            insertPage.Transaction = transaction;
+            insertPage.CommandText = """
+                INSERT INTO ruby_batch_pages (batch_id, page_id, page_marker)
+                VALUES ($batchId, $pageId, $marker);
+                """;
+            insertPage.Parameters.AddWithValue("$batchId", batchId.ToString("D"));
+            insertPage.Parameters.AddWithValue("$pageId", page.PageId.ToString("D"));
+            insertPage.Parameters.AddWithValue("$marker", page.PageMarker);
+            await insertPage.ExecuteNonQueryAsync(cancellationToken);
+        }
+        foreach (var candidate in candidates ?? [])
+        {
+            var insertCandidate = _connection.CreateCommand();
+            insertCandidate.Transaction = transaction;
+            insertCandidate.CommandText = """
+                INSERT INTO ruby_batch_candidates
+                    (batch_id, page_marker, ocr_text, left_x, top_y, right_x, bottom_y,
+                     confidence, adjacent_body_text, ocr_run_id, returned_to_body, included_in_draft)
+                VALUES ($batchId, $marker, $text, $left, $top, $right, $bottom,
+                        $confidence, $adjacent, $runId, $returned, $included);
+                """;
+            insertCandidate.Parameters.AddWithValue("$batchId", batchId.ToString("D"));
+            insertCandidate.Parameters.AddWithValue("$marker", candidate.PageMarker);
+            insertCandidate.Parameters.AddWithValue("$text", candidate.OcrText);
+            insertCandidate.Parameters.AddWithValue("$left", candidate.Left);
+            insertCandidate.Parameters.AddWithValue("$top", candidate.Top);
+            insertCandidate.Parameters.AddWithValue("$right", candidate.Right);
+            insertCandidate.Parameters.AddWithValue("$bottom", candidate.Bottom);
+            insertCandidate.Parameters.AddWithValue("$confidence", candidate.Confidence);
+            insertCandidate.Parameters.AddWithValue("$adjacent", candidate.AdjacentBodyText);
+            insertCandidate.Parameters.AddWithValue("$runId", candidate.OcrRunId.ToString("D"));
+            insertCandidate.Parameters.AddWithValue("$returned", candidate.ReturnedToBody ? 1 : 0);
+            insertCandidate.Parameters.AddWithValue("$included", candidate.IncludedInDraft ? 1 : 0);
+            await insertCandidate.ExecuteNonQueryAsync(cancellationToken);
+        }
+        await transaction.CommitAsync(cancellationToken);
+    }
+
+    public async Task<RubyBatchSnapshot> LoadRubyBatchAsync(Guid batchId, CancellationToken cancellationToken)
+    {
+        var batch = _connection.CreateCommand();
+        batch.CommandText = """
+            SELECT project_id, document_snapshot_id, ruby_policy, confirmed_text_stale
+            FROM ruby_batches WHERE id = $id;
+            """;
+        batch.Parameters.AddWithValue("$id", batchId.ToString("D"));
+        Guid projectId;
+        Guid snapshotId;
+        RubyPolicy policy;
+        bool confirmedTextStale;
+        await using (var reader = await batch.ExecuteReaderAsync(cancellationToken))
+        {
+            if (!await reader.ReadAsync(cancellationToken))
+                throw new KeyNotFoundException($"Ruby batch {batchId:D} was not found.");
+            projectId = Guid.Parse(reader.GetString(0));
+            snapshotId = Guid.Parse(reader.GetString(1));
+            policy = Enum.Parse<RubyPolicy>(reader.GetString(2));
+            confirmedTextStale = reader.GetInt32(3) != 0;
+        }
+        var document = await LoadStructuredDocumentAsync(projectId, snapshotId, cancellationToken);
+        var pages = _connection.CreateCommand();
+        pages.CommandText = """
+            SELECT page_marker, page_id
+            FROM ruby_batch_pages WHERE batch_id = $id ORDER BY page_marker;
+            """;
+        pages.Parameters.AddWithValue("$id", batchId.ToString("D"));
+        var markers = new HashSet<string>(StringComparer.Ordinal);
+        var pageIdsByMarker = new Dictionary<string, Guid>(StringComparer.Ordinal);
+        await using (var reader = await pages.ExecuteReaderAsync(cancellationToken))
+            while (await reader.ReadAsync(cancellationToken))
+            {
+                markers.Add(reader.GetString(0));
+                pageIdsByMarker.Add(reader.GetString(0), Guid.Parse(reader.GetString(1)));
+            }
+        var candidates = new List<RubyOcrCandidate>();
+        var candidateCommand = _connection.CreateCommand();
+        candidateCommand.CommandText = """
+            SELECT page_marker, ocr_text, left_x, top_y, right_x, bottom_y, confidence,
+                   adjacent_body_text, ocr_run_id, returned_to_body, included_in_draft
+            FROM ruby_batch_candidates WHERE batch_id = $id ORDER BY page_marker, rowid;
+            """;
+        candidateCommand.Parameters.AddWithValue("$id", batchId.ToString("D"));
+        await using (var candidateReader = await candidateCommand.ExecuteReaderAsync(cancellationToken))
+            while (await candidateReader.ReadAsync(cancellationToken))
+                candidates.Add(new RubyOcrCandidate(
+                    candidateReader.GetString(0), candidateReader.GetString(1),
+                    candidateReader.GetDouble(2), candidateReader.GetDouble(3),
+                    candidateReader.GetDouble(4), candidateReader.GetDouble(5),
+                    candidateReader.GetDouble(6), candidateReader.GetString(7),
+                    Guid.Parse(candidateReader.GetString(8)), candidateReader.GetInt32(9) != 0,
+                    candidateReader.GetInt32(10) != 0));
+        return new RubyBatchSnapshot(batchId, policy, snapshotId, document, markers, pageIdsByMarker,
+            confirmedTextStale, candidates);
+    }
+
+    public async Task<StructuredDocument> LoadStructuredDocumentAsync(
+        Guid projectId,
+        Guid snapshotId,
+        CancellationToken cancellationToken)
+    {
+        var snapshot = _connection.CreateCommand();
+        snapshot.CommandText = """
+            SELECT document_text_hash FROM document_snapshots
+            WHERE id = $id AND project_id = $projectId;
+            """;
+        snapshot.Parameters.AddWithValue("$id", snapshotId.ToString("D"));
+        snapshot.Parameters.AddWithValue("$projectId", projectId.ToString("D"));
+        var documentHash = await snapshot.ExecuteScalarAsync(cancellationToken) as string
+            ?? throw new KeyNotFoundException($"Document snapshot {snapshotId:D} was not found.");
+        var paragraphs = new List<StructuredParagraph>();
+        var paragraphCommand = _connection.CreateCommand();
+        paragraphCommand.CommandText = """
+            SELECT id, role, plain_text, text_hash, logical_key
+            FROM document_paragraphs WHERE snapshot_id = $snapshotId ORDER BY ordinal;
+            """;
+        paragraphCommand.Parameters.AddWithValue("$snapshotId", snapshotId.ToString("D"));
+        var paragraphRows = new List<(Guid Id, string Role, string Text, string Hash, string LogicalKey)>();
+        await using (var reader = await paragraphCommand.ExecuteReaderAsync(cancellationToken))
+            while (await reader.ReadAsync(cancellationToken))
+                paragraphRows.Add((Guid.Parse(reader.GetString(0)), reader.GetString(1), reader.GetString(2),
+                    reader.GetString(3), reader.GetString(4)));
+        foreach (var row in paragraphRows)
+        {
+            var spans = new List<SourceSpan>();
+            var spanCommand = _connection.CreateCommand();
+            spanCommand.CommandText = """
+                SELECT page_id, page_marker, start_offset, length
+                FROM document_paragraph_source_spans
+                WHERE snapshot_id = $snapshotId AND paragraph_id = $paragraphId ORDER BY ordinal;
+                """;
+            spanCommand.Parameters.AddWithValue("$snapshotId", snapshotId.ToString("D"));
+            spanCommand.Parameters.AddWithValue("$paragraphId", row.Id.ToString("D"));
+            await using (var spanReader = await spanCommand.ExecuteReaderAsync(cancellationToken))
+                while (await spanReader.ReadAsync(cancellationToken))
+                    spans.Add(new SourceSpan(Guid.Parse(spanReader.GetString(0)), spanReader.GetString(1),
+                        spanReader.GetInt32(2), spanReader.GetInt32(3)));
+            var paragraph = new StructuredParagraph(row.Id,
+                Enum.Parse<TateScribe.Core.Export.DocumentElementRole>(row.Role),
+                [new TextInline(row.Text)], row.Hash, spans, row.LogicalKey);
+            var annotationCommand = _connection.CreateCommand();
+            annotationCommand.CommandText = """
+                SELECT a.id, a.start_offset, a.length, a.base_text, a.reading, a.source,
+                       a.confidence, a.evidence, a.updated_utc
+                FROM ruby_annotations a
+                JOIN ruby_batches b ON b.id = a.batch_id
+                WHERE b.document_snapshot_id = $snapshotId
+                  AND a.paragraph_id = $paragraphId AND a.status = 'Confirmed'
+                ORDER BY a.updated_utc DESC;
+                """;
+            annotationCommand.Parameters.AddWithValue("$snapshotId", snapshotId.ToString("D"));
+            annotationCommand.Parameters.AddWithValue("$paragraphId", row.Id.ToString("D"));
+            var annotations = new List<RubyAnnotationProposal>();
+            await using (var annotationReader = await annotationCommand.ExecuteReaderAsync(cancellationToken))
+                while (await annotationReader.ReadAsync(cancellationToken))
+                    annotations.Add(new RubyAnnotationProposal(
+                        row.Id.ToString("D"), annotationReader.GetInt32(1), annotationReader.GetInt32(2),
+                        annotationReader.GetString(3), annotationReader.GetString(4),
+                        Enum.Parse<RubySource>(annotationReader.GetString(5)), annotationReader.GetDouble(6),
+                        [], annotationReader.GetString(7), Guid.Parse(annotationReader.GetString(0)),
+                        RubyAnnotationStatus.Confirmed));
+            var latest = annotations
+                .GroupBy(item => (item.Start, item.Length))
+                .Select(group => group.First());
+            paragraphs.Add(RubyDocumentComposer.Apply(paragraph, latest));
+        }
+        return new StructuredDocument(projectId, paragraphs, documentHash);
+    }
+
+    public async Task SetRubyAnnotationStatusAsync(
+        Guid annotationId,
+        RubyAnnotationStatus status,
+        CancellationToken cancellationToken)
+    {
+        await using var transaction = _connection.BeginTransaction();
+        if (status == RubyAnnotationStatus.Confirmed)
+        {
+            string paragraphId;
+            int start;
+            int length;
+            var target = _connection.CreateCommand();
+            target.Transaction = transaction;
+            target.CommandText = """
+                SELECT paragraph_id, start_offset, length
+                FROM ruby_annotations WHERE id = $id;
+                """;
+            target.Parameters.AddWithValue("$id", annotationId.ToString("D"));
+            await using (var reader = await target.ExecuteReaderAsync(cancellationToken))
+            {
+                if (!await reader.ReadAsync(cancellationToken))
+                    throw new KeyNotFoundException($"Ruby annotation {annotationId:D} was not found.");
+                paragraphId = reader.GetString(0);
+                start = reader.GetInt32(1);
+                length = reader.GetInt32(2);
+            }
+            await StaleConflictingConfirmedRubyAsync(
+                transaction,
+                annotationId,
+                paragraphId,
+                start,
+                length,
+                cancellationToken);
+        }
+        var command = _connection.CreateCommand();
+        command.Transaction = transaction;
+        command.CommandText = """
+            INSERT INTO ruby_annotation_history
+                (annotation_id, paragraph_id, start_offset, length, base_text, reading, source,
+                 confidence, evidence, status, batch_id, recorded_utc)
+            SELECT id, paragraph_id, start_offset, length, base_text, reading, source,
+                   confidence, evidence, status, batch_id, $utc
+            FROM ruby_annotations WHERE id = $id AND status <> $status;
+            UPDATE ruby_annotations SET status = $status, updated_utc = $utc
+            WHERE id = $id AND status <> $status;
+            """;
+        command.Parameters.AddWithValue("$status", status.ToString());
+        command.Parameters.AddWithValue("$utc", DateTimeOffset.UtcNow.ToString("O"));
+        command.Parameters.AddWithValue("$id", annotationId.ToString("D"));
+        await command.ExecuteNonQueryAsync(cancellationToken);
+        var exists = _connection.CreateCommand();
+        exists.Transaction = transaction;
+        exists.CommandText = "SELECT COUNT(*) FROM ruby_annotations WHERE id = $id;";
+        exists.Parameters.AddWithValue("$id", annotationId.ToString("D"));
+        if (Convert.ToInt32(await exists.ExecuteScalarAsync(cancellationToken), CultureInfo.InvariantCulture) != 1)
+            throw new KeyNotFoundException($"Ruby annotation {annotationId:D} was not found.");
+        await transaction.CommitAsync(cancellationToken);
+    }
+
+    public async Task<Guid?> GetLatestRubyBatchIdAsync(CancellationToken cancellationToken)
+    {
+        var projectId = await GetProjectIdAsync(cancellationToken);
+        var command = _connection.CreateCommand();
+        command.CommandText = """
+            SELECT id FROM ruby_batches WHERE project_id = $projectId
+            ORDER BY exported_utc DESC LIMIT 1;
+            """;
+        command.Parameters.AddWithValue("$projectId", projectId.ToString("D"));
+        return Guid.TryParse(await command.ExecuteScalarAsync(cancellationToken) as string, out var id) ? id : null;
+    }
+
+    public async Task<IReadOnlyList<RubyAnnotationProposal>> LoadRubyAnnotationsAsync(
+        Guid batchId,
+        CancellationToken cancellationToken)
+    {
+        var rows = new List<(Guid Id, string ParagraphId, int Start, int Length, string BaseText, string Reading,
+            RubySource Source, double Confidence, string Evidence, RubyAnnotationStatus Status)>();
+        var command = _connection.CreateCommand();
+        command.CommandText = """
+            SELECT id, paragraph_id, start_offset, length, base_text, reading, source,
+                   confidence, evidence, status
+            FROM ruby_annotations WHERE batch_id = $batchId
+            ORDER BY paragraph_id, start_offset, length;
+            """;
+        command.Parameters.AddWithValue("$batchId", batchId.ToString("D"));
+        await using (var reader = await command.ExecuteReaderAsync(cancellationToken))
+            while (await reader.ReadAsync(cancellationToken))
+                rows.Add((Guid.Parse(reader.GetString(0)), reader.GetString(1), reader.GetInt32(2),
+                    reader.GetInt32(3), reader.GetString(4), reader.GetString(5),
+                    Enum.Parse<RubySource>(reader.GetString(6)), reader.GetDouble(7), reader.GetString(8),
+                    Enum.Parse<RubyAnnotationStatus>(reader.GetString(9))));
+        var result = new List<RubyAnnotationProposal>();
+        foreach (var row in rows)
+        {
+            var markers = new List<string>();
+            var evidence = _connection.CreateCommand();
+            evidence.CommandText = """
+                SELECT page_marker FROM ruby_annotation_evidence_pages
+                WHERE annotation_id = $id ORDER BY page_marker;
+                """;
+            evidence.Parameters.AddWithValue("$id", row.Id.ToString("D"));
+            await using (var reader = await evidence.ExecuteReaderAsync(cancellationToken))
+                while (await reader.ReadAsync(cancellationToken)) markers.Add(reader.GetString(0));
+            result.Add(new RubyAnnotationProposal(
+                row.ParagraphId, row.Start, row.Length, row.BaseText, row.Reading, row.Source,
+                row.Confidence, markers, row.Evidence, row.Id, row.Status));
+        }
+        return result;
+    }
+
+    public async Task<IReadOnlyList<RubyUnresolvedItem>> LoadRubyUnresolvedItemsAsync(
+        Guid batchId,
+        CancellationToken cancellationToken)
+    {
+        var rows = new List<(Guid Id, string ParagraphId, int Start, int Length, string BaseText, string Reason)>();
+        var command = _connection.CreateCommand();
+        command.CommandText = """
+            SELECT id, paragraph_id, start_offset, length, base_text, reason
+            FROM ruby_unresolved_items
+            WHERE batch_id = $batchId
+            ORDER BY paragraph_id, start_offset, length;
+            """;
+        command.Parameters.AddWithValue("$batchId", batchId.ToString("D"));
+        await using (var reader = await command.ExecuteReaderAsync(cancellationToken))
+            while (await reader.ReadAsync(cancellationToken))
+                rows.Add((
+                    Guid.Parse(reader.GetString(0)),
+                    reader.GetString(1),
+                    reader.GetInt32(2),
+                    reader.GetInt32(3),
+                    reader.GetString(4),
+                    reader.GetString(5)));
+
+        var result = new List<RubyUnresolvedItem>();
+        foreach (var row in rows)
+        {
+            var markers = new List<string>();
+            var evidence = _connection.CreateCommand();
+            evidence.CommandText = """
+                SELECT page_marker FROM ruby_unresolved_evidence_pages
+                WHERE unresolved_id = $id ORDER BY page_marker;
+                """;
+            evidence.Parameters.AddWithValue("$id", row.Id.ToString("D"));
+            await using (var reader = await evidence.ExecuteReaderAsync(cancellationToken))
+                while (await reader.ReadAsync(cancellationToken))
+                    markers.Add(reader.GetString(0));
+            result.Add(new RubyUnresolvedItem(
+                row.ParagraphId,
+                row.Start,
+                row.Length,
+                row.BaseText,
+                markers,
+                row.Reason));
+        }
+        return result;
+    }
+
+    public async Task UpdateRubyAnnotationsAsync(
+        IReadOnlyList<RubyAnnotationProposal> annotations,
+        CancellationToken cancellationToken)
+    {
+        await using var transaction = _connection.BeginTransaction();
+        foreach (var item in annotations)
+        {
+            if (item.Status == RubyAnnotationStatus.Confirmed)
+                await StaleConflictingConfirmedRubyAsync(
+                    transaction,
+                    item.AnnotationId,
+                    item.ParagraphId,
+                    item.Start,
+                    item.Length,
+                    cancellationToken);
+            var command = _connection.CreateCommand();
+            command.Transaction = transaction;
+            command.CommandText = """
+                INSERT INTO ruby_annotation_history
+                    (annotation_id, paragraph_id, start_offset, length, base_text, reading, source,
+                     confidence, evidence, status, batch_id, recorded_utc)
+                SELECT id, paragraph_id, start_offset, length, base_text, reading, source,
+                       confidence, evidence, status, batch_id, $utc
+                FROM ruby_annotations
+                WHERE id = $id AND (
+                    start_offset <> $start OR length <> $length OR base_text <> $baseText
+                    OR reading <> $reading OR status <> $status
+                );
+                UPDATE ruby_annotations
+                SET start_offset = $start, length = $length, base_text = $baseText,
+                    reading = $reading, status = $status, updated_utc = $utc
+                WHERE id = $id AND (
+                    start_offset <> $start OR length <> $length OR base_text <> $baseText
+                    OR reading <> $reading OR status <> $status
+                );
+                """;
+            command.Parameters.AddWithValue("$start", item.Start);
+            command.Parameters.AddWithValue("$length", item.Length);
+            command.Parameters.AddWithValue("$baseText", item.BaseText);
+            command.Parameters.AddWithValue("$reading", item.Reading);
+            command.Parameters.AddWithValue("$status", item.Status.ToString());
+            command.Parameters.AddWithValue("$utc", DateTimeOffset.UtcNow.ToString("O"));
+            command.Parameters.AddWithValue("$id", item.AnnotationId.ToString("D"));
+            await command.ExecuteNonQueryAsync(cancellationToken);
+            var exists = _connection.CreateCommand();
+            exists.Transaction = transaction;
+            exists.CommandText = "SELECT COUNT(*) FROM ruby_annotations WHERE id = $id;";
+            exists.Parameters.AddWithValue("$id", item.AnnotationId.ToString("D"));
+            if (Convert.ToInt32(await exists.ExecuteScalarAsync(cancellationToken), CultureInfo.InvariantCulture) != 1)
+                throw new KeyNotFoundException($"Ruby annotation {item.AnnotationId:D} was not found.");
+        }
+        await transaction.CommitAsync(cancellationToken);
+    }
+
+    private async Task StaleConflictingConfirmedRubyAsync(
+        SqliteTransaction transaction,
+        Guid annotationId,
+        string paragraphId,
+        int start,
+        int length,
+        CancellationToken cancellationToken)
+    {
+        var command = _connection.CreateCommand();
+        command.Transaction = transaction;
+        command.CommandText = """
+            INSERT INTO ruby_annotation_history
+                (annotation_id, paragraph_id, start_offset, length, base_text, reading, source,
+                 confidence, evidence, status, batch_id, recorded_utc)
+            SELECT other.id, other.paragraph_id, other.start_offset, other.length,
+                   other.base_text, other.reading, other.source, other.confidence,
+                   other.evidence, other.status, other.batch_id, $utc
+            FROM ruby_annotations other
+            JOIN ruby_batches other_batch ON other_batch.id = other.batch_id
+            WHERE other.id <> $id
+              AND other.status = 'Confirmed'
+              AND other.paragraph_id = $paragraphId
+              AND other_batch.document_snapshot_id = (
+                  SELECT target_batch.document_snapshot_id
+                  FROM ruby_annotations target
+                  JOIN ruby_batches target_batch ON target_batch.id = target.batch_id
+                  WHERE target.id = $id
+              )
+              AND $start < other.start_offset + other.length
+              AND $end > other.start_offset;
+            UPDATE ruby_annotations
+            SET status = 'Stale', updated_utc = $utc
+            WHERE id IN (
+                SELECT other.id
+                FROM ruby_annotations other
+                JOIN ruby_batches other_batch ON other_batch.id = other.batch_id
+                WHERE other.id <> $id
+                  AND other.status = 'Confirmed'
+                  AND other.paragraph_id = $paragraphId
+                  AND other_batch.document_snapshot_id = (
+                      SELECT target_batch.document_snapshot_id
+                      FROM ruby_annotations target
+                      JOIN ruby_batches target_batch ON target_batch.id = target.batch_id
+                      WHERE target.id = $id
+                  )
+                  AND $start < other.start_offset + other.length
+                  AND $end > other.start_offset
+            );
+            """;
+        command.Parameters.AddWithValue("$id", annotationId.ToString("D"));
+        command.Parameters.AddWithValue("$paragraphId", paragraphId);
+        command.Parameters.AddWithValue("$start", start);
+        command.Parameters.AddWithValue("$end", (long)start + length);
+        command.Parameters.AddWithValue("$utc", DateTimeOffset.UtcNow.ToString("O"));
+        await command.ExecuteNonQueryAsync(cancellationToken);
+    }
+
+    private async Task StaleConflictingConfirmedRubyForSnapshotAsync(
+        SqliteTransaction transaction,
+        Guid annotationId,
+        Guid snapshotId,
+        string paragraphId,
+        int start,
+        int length,
+        CancellationToken cancellationToken)
+    {
+        var command = _connection.CreateCommand();
+        command.Transaction = transaction;
+        command.CommandText = """
+            INSERT INTO ruby_annotation_history
+                (annotation_id, paragraph_id, start_offset, length, base_text, reading, source,
+                 confidence, evidence, status, batch_id, recorded_utc)
+            SELECT other.id, other.paragraph_id, other.start_offset, other.length,
+                   other.base_text, other.reading, other.source, other.confidence,
+                   other.evidence, other.status, other.batch_id, $utc
+            FROM ruby_annotations other
+            JOIN ruby_batches other_batch ON other_batch.id = other.batch_id
+            WHERE other.id <> $id
+              AND other.status = 'Confirmed'
+              AND other.paragraph_id = $paragraphId
+              AND other_batch.document_snapshot_id = $snapshotId
+              AND $start < other.start_offset + other.length
+              AND $end > other.start_offset;
+            UPDATE ruby_annotations
+            SET status = 'Stale', updated_utc = $utc
+            WHERE id IN (
+                SELECT other.id
+                FROM ruby_annotations other
+                JOIN ruby_batches other_batch ON other_batch.id = other.batch_id
+                WHERE other.id <> $id
+                  AND other.status = 'Confirmed'
+                  AND other.paragraph_id = $paragraphId
+                  AND other_batch.document_snapshot_id = $snapshotId
+                  AND $start < other.start_offset + other.length
+                  AND $end > other.start_offset
+            );
+            """;
+        command.Parameters.AddWithValue("$id", annotationId.ToString("D"));
+        command.Parameters.AddWithValue("$snapshotId", snapshotId.ToString("D"));
+        command.Parameters.AddWithValue("$paragraphId", paragraphId);
+        command.Parameters.AddWithValue("$start", start);
+        command.Parameters.AddWithValue("$end", (long)start + length);
+        command.Parameters.AddWithValue("$utc", DateTimeOffset.UtcNow.ToString("O"));
+        await command.ExecuteNonQueryAsync(cancellationToken);
+    }
+
+    public async Task<int> GetRubyAnnotationHistoryCountAsync(Guid annotationId, CancellationToken cancellationToken)
+    {
+        var command = _connection.CreateCommand();
+        command.CommandText = "SELECT COUNT(*) FROM ruby_annotation_history WHERE annotation_id = $id;";
+        command.Parameters.AddWithValue("$id", annotationId.ToString("D"));
+        return Convert.ToInt32(await command.ExecuteScalarAsync(cancellationToken), CultureInfo.InvariantCulture);
     }
 
     public async Task<Guid> GetProjectIdAsync(CancellationToken cancellationToken)
@@ -391,12 +1329,46 @@ public sealed class SqliteProjectRepository : IAsyncDisposable
             await AppendTextVersionIfChangedAsync(
                 transaction, candidate.PageId, "Confirmed", candidate.ConfirmedText,
                 "ChatGPTImport", baselineRunId, cancellationToken);
+            var currentJoin = _connection.CreateCommand();
+            currentJoin.Transaction = transaction;
+            currentJoin.CommandText = "SELECT boundary_join_type FROM pages WHERE id = $pageId;";
+            currentJoin.Parameters.AddWithValue("$pageId", candidate.PageId.ToString("D"));
+            var previousJoin = await currentJoin.ExecuteScalarAsync(cancellationToken) as string;
             var join = _connection.CreateCommand();
             join.Transaction = transaction;
             join.CommandText = "UPDATE pages SET boundary_join_type = $join WHERE id = $pageId;";
             join.Parameters.AddWithValue("$join", candidate.JoinToNext.ToString());
             join.Parameters.AddWithValue("$pageId", candidate.PageId.ToString("D"));
             await join.ExecuteNonQueryAsync(cancellationToken);
+            if (!string.Equals(previousJoin, candidate.JoinToNext.ToString(), StringComparison.Ordinal))
+                await MarkRubyStructureStaleAsync(transaction, candidate.PageId, cancellationToken);
+            if (candidate.Diff?.ChangedCharacterCount > 0)
+            {
+                var stale = _connection.CreateCommand();
+                stale.Transaction = transaction;
+                stale.CommandText = """
+                    UPDATE ruby_batches SET confirmed_text_stale = 1
+                    WHERE id IN (SELECT batch_id FROM ruby_batch_pages WHERE page_id = $pageId);
+                    INSERT INTO ruby_annotation_history
+                        (annotation_id, paragraph_id, start_offset, length, base_text, reading, source,
+                         confidence, evidence, status, batch_id, recorded_utc)
+                    SELECT id, paragraph_id, start_offset, length, base_text, reading, source,
+                           confidence, evidence, status, batch_id, $utc
+                    FROM ruby_annotations
+                    WHERE status IN ('Proposed', 'Confirmed')
+                      AND paragraph_id IN (
+                        SELECT paragraph_id FROM document_paragraph_source_spans WHERE page_id = $pageId
+                      );
+                    UPDATE ruby_annotations SET status = 'Stale', updated_utc = $utc
+                    WHERE status IN ('Proposed', 'Confirmed')
+                      AND paragraph_id IN (
+                        SELECT paragraph_id FROM document_paragraph_source_spans WHERE page_id = $pageId
+                      );
+                    """;
+                stale.Parameters.AddWithValue("$pageId", candidate.PageId.ToString("D"));
+                stale.Parameters.AddWithValue("$utc", DateTimeOffset.UtcNow.ToString("O"));
+                await stale.ExecuteNonQueryAsync(cancellationToken);
+            }
         }
         var import = _connection.CreateCommand();
         import.Transaction = transaction;
@@ -603,7 +1575,7 @@ public sealed class SqliteProjectRepository : IAsyncDisposable
         var command = _connection.CreateCommand();
         command.CommandText = """
             SELECT ordinal, text, confidence, left_x, top_y, right_x, bottom_y,
-                   role, included_in_draft, manual_override
+                   role, included_in_draft, manual_override, automatic_role
             FROM ocr_run_words WHERE run_id = $runId ORDER BY ordinal;
             """;
         command.Parameters.AddWithValue("$runId", runId.Value.ToString("D"));
@@ -614,7 +1586,8 @@ public sealed class SqliteProjectRepository : IAsyncDisposable
                 runId.Value, reader.GetInt32(0),
                 new OcrWord(reader.GetString(1), reader.GetDouble(2), reader.GetDouble(3),
                     reader.GetDouble(4), reader.GetDouble(5), reader.GetDouble(6)),
-                reader.GetString(7), reader.GetInt32(8) != 0, reader.GetInt32(9) != 0));
+                reader.GetString(7), reader.GetInt32(8) != 0, reader.GetInt32(9) != 0,
+                reader.GetString(10)));
         return result;
     }
 
@@ -628,6 +1601,8 @@ public sealed class SqliteProjectRepository : IAsyncDisposable
     {
         if (role is not ("Body" or "RubyCandidate"))
             throw new ArgumentOutOfRangeException(nameof(role));
+        var selectedBefore = (await LoadPageTextStateAsync(
+            pageId, cancellationToken)).SelectForProofreading();
         await using var transaction = _connection.BeginTransaction();
         var wordCommand = _connection.CreateCommand();
         wordCommand.Transaction = transaction;
@@ -700,6 +1675,9 @@ public sealed class SqliteProjectRepository : IAsyncDisposable
         proposal.Parameters.AddWithValue("$text", draft);
         proposal.Parameters.AddWithValue("$utc", DateTimeOffset.UtcNow.ToString("O"));
         await proposal.ExecuteNonQueryAsync(cancellationToken);
+        if (selectedBefore.Source == "Suggested"
+            && !string.Equals(selectedBefore.Text, draft, StringComparison.Ordinal))
+            await MarkRubyStructureStaleAsync(transaction, pageId, cancellationToken);
         var reviewCount = _connection.CreateCommand();
         reviewCount.Transaction = transaction;
         reviewCount.CommandText = """
@@ -728,7 +1706,7 @@ public sealed class SqliteProjectRepository : IAsyncDisposable
         command.Transaction = transaction;
         command.CommandText = """
             SELECT ordinal, text, confidence, left_x, top_y, right_x, bottom_y,
-                   role, included_in_draft, manual_override
+                   role, included_in_draft, manual_override, automatic_role
             FROM ocr_run_words WHERE run_id = $runId ORDER BY ordinal;
             """;
         command.Parameters.AddWithValue("$runId", runId.ToString("D"));
@@ -739,7 +1717,8 @@ public sealed class SqliteProjectRepository : IAsyncDisposable
                 runId, reader.GetInt32(0),
                 new OcrWord(reader.GetString(1), reader.GetDouble(2), reader.GetDouble(3),
                     reader.GetDouble(4), reader.GetDouble(5), reader.GetDouble(6)),
-                reader.GetString(7), reader.GetInt32(8) != 0, reader.GetInt32(9) != 0));
+                reader.GetString(7), reader.GetInt32(8) != 0, reader.GetInt32(9) != 0,
+                reader.GetString(10)));
         return result;
     }
 
@@ -1057,10 +2036,10 @@ public sealed class SqliteProjectRepository : IAsyncDisposable
             insert.CommandText = """
                 INSERT INTO ocr_run_words (
                     run_id, ordinal, text, confidence, left_x, top_y, right_x, bottom_y,
-                    role, included_in_draft, coordinate_status, manual_override)
+                    role, included_in_draft, coordinate_status, manual_override, automatic_role)
                 VALUES (
                     $run, $ordinal, $text, $confidence, $left, $top, $right, $bottom,
-                    $role, $included, 'Known', $manual);
+                    $role, $included, 'Known', $manual, $automaticRole);
                 """;
             insert.Parameters.AddWithValue("$run", runId.ToString("D"));
             insert.Parameters.AddWithValue("$ordinal", ordinal);
@@ -1073,6 +2052,7 @@ public sealed class SqliteProjectRepository : IAsyncDisposable
             insert.Parameters.AddWithValue("$role", role);
             insert.Parameters.AddWithValue("$included", included ? 1 : 0);
             insert.Parameters.AddWithValue("$manual", manualOverride ? 1 : 0);
+            insert.Parameters.AddWithValue("$automaticRole", automaticRole);
             await insert.ExecuteNonQueryAsync(cancellationToken);
         }
         return runId;
@@ -1204,6 +2184,7 @@ public sealed class SqliteProjectRepository : IAsyncDisposable
                 text TEXT NOT NULL, confidence REAL NOT NULL, left_x REAL NOT NULL, top_y REAL NOT NULL,
                 right_x REAL NOT NULL, bottom_y REAL NOT NULL, role TEXT NOT NULL, included_in_draft INTEGER NOT NULL,
                 coordinate_status TEXT NOT NULL, manual_override INTEGER NOT NULL DEFAULT 0,
+                automatic_role TEXT NOT NULL DEFAULT 'Body',
                 PRIMARY KEY (run_id, ordinal)
             );
             CREATE TABLE IF NOT EXISTS ocr_word_overrides (
@@ -1329,6 +2310,147 @@ public sealed class SqliteProjectRepository : IAsyncDisposable
                 await SetSchemaVersionAsync(transaction, 6, cancellationToken);
             }
 
+            if (currentVersion < 7)
+            {
+                await ExecuteAsync(transaction, """
+                    CREATE TABLE IF NOT EXISTS document_snapshots (
+                        id TEXT PRIMARY KEY NOT NULL,
+                        project_id TEXT NOT NULL,
+                        document_text_hash TEXT NOT NULL,
+                        created_utc TEXT NOT NULL,
+                        source_text_version TEXT NOT NULL,
+                        UNIQUE(project_id, document_text_hash)
+                    );
+                    CREATE TABLE IF NOT EXISTS document_paragraphs (
+                        id TEXT NOT NULL,
+                        snapshot_id TEXT NOT NULL REFERENCES document_snapshots(id) ON DELETE CASCADE,
+                        ordinal INTEGER NOT NULL,
+                        role TEXT NOT NULL,
+                        plain_text TEXT NOT NULL,
+                        text_hash TEXT NOT NULL,
+                        logical_key TEXT NOT NULL,
+                        PRIMARY KEY(snapshot_id, id),
+                        UNIQUE(snapshot_id, ordinal)
+                    );
+                    CREATE TABLE IF NOT EXISTS document_paragraph_source_spans (
+                        snapshot_id TEXT NOT NULL,
+                        paragraph_id TEXT NOT NULL,
+                        ordinal INTEGER NOT NULL,
+                        page_id TEXT NOT NULL REFERENCES pages(id) ON DELETE RESTRICT,
+                        page_marker TEXT NOT NULL,
+                        start_offset INTEGER NOT NULL,
+                        length INTEGER NOT NULL,
+                        PRIMARY KEY(snapshot_id, paragraph_id, ordinal),
+                        FOREIGN KEY(snapshot_id, paragraph_id)
+                            REFERENCES document_paragraphs(snapshot_id, id) ON DELETE CASCADE
+                    );
+                    CREATE TABLE IF NOT EXISTS ruby_batches (
+                        id TEXT PRIMARY KEY NOT NULL,
+                        project_id TEXT NOT NULL,
+                        document_snapshot_id TEXT NOT NULL REFERENCES document_snapshots(id) ON DELETE RESTRICT,
+                        ruby_policy TEXT NOT NULL,
+                        exported_utc TEXT NOT NULL,
+                        confirmed_text_stale INTEGER NOT NULL DEFAULT 0
+                    );
+                    CREATE TABLE IF NOT EXISTS ruby_batch_pages (
+                        batch_id TEXT NOT NULL REFERENCES ruby_batches(id) ON DELETE CASCADE,
+                        page_id TEXT NOT NULL REFERENCES pages(id) ON DELETE RESTRICT,
+                        page_marker TEXT NOT NULL,
+                        PRIMARY KEY(batch_id, page_marker)
+                    );
+                    CREATE TABLE IF NOT EXISTS ruby_batch_candidates (
+                        batch_id TEXT NOT NULL REFERENCES ruby_batches(id) ON DELETE CASCADE,
+                        page_marker TEXT NOT NULL,
+                        ocr_text TEXT NOT NULL,
+                        left_x REAL NOT NULL, top_y REAL NOT NULL,
+                        right_x REAL NOT NULL, bottom_y REAL NOT NULL,
+                        confidence REAL NOT NULL,
+                        adjacent_body_text TEXT NOT NULL,
+                        ocr_run_id TEXT NOT NULL,
+                        returned_to_body INTEGER NOT NULL,
+                        included_in_draft INTEGER NOT NULL
+                    );
+                    CREATE TABLE IF NOT EXISTS ruby_annotations (
+                        id TEXT PRIMARY KEY NOT NULL,
+                        paragraph_id TEXT NOT NULL,
+                        start_offset INTEGER NOT NULL,
+                        length INTEGER NOT NULL,
+                        base_text TEXT NOT NULL,
+                        reading TEXT NOT NULL,
+                        source TEXT NOT NULL,
+                        confidence REAL NOT NULL,
+                        evidence TEXT NOT NULL,
+                        status TEXT NOT NULL,
+                        batch_id TEXT NOT NULL REFERENCES ruby_batches(id) ON DELETE RESTRICT,
+                        created_utc TEXT NOT NULL,
+                        updated_utc TEXT NOT NULL,
+                        UNIQUE(batch_id, paragraph_id, start_offset, length, reading)
+                    );
+                    CREATE TABLE IF NOT EXISTS ruby_annotation_evidence_pages (
+                        annotation_id TEXT NOT NULL REFERENCES ruby_annotations(id) ON DELETE CASCADE,
+                        page_id TEXT NOT NULL REFERENCES pages(id) ON DELETE RESTRICT,
+                        page_marker TEXT NOT NULL,
+                        PRIMARY KEY(annotation_id, page_marker)
+                    );
+                    CREATE TABLE IF NOT EXISTS ruby_annotation_history (
+                        annotation_id TEXT NOT NULL,
+                        paragraph_id TEXT NOT NULL,
+                        start_offset INTEGER NOT NULL,
+                        length INTEGER NOT NULL,
+                        base_text TEXT NOT NULL,
+                        reading TEXT NOT NULL,
+                        source TEXT NOT NULL,
+                        confidence REAL NOT NULL,
+                        evidence TEXT NOT NULL,
+                        status TEXT NOT NULL,
+                        batch_id TEXT NOT NULL,
+                        recorded_utc TEXT NOT NULL
+                    );
+                    CREATE TABLE IF NOT EXISTS ruby_unresolved_items (
+                        id TEXT PRIMARY KEY NOT NULL,
+                        paragraph_id TEXT NOT NULL,
+                        start_offset INTEGER NOT NULL,
+                        length INTEGER NOT NULL,
+                        base_text TEXT NOT NULL,
+                        reason TEXT NOT NULL,
+                        batch_id TEXT NOT NULL REFERENCES ruby_batches(id) ON DELETE RESTRICT,
+                        UNIQUE(batch_id, paragraph_id, start_offset, length, base_text, reason)
+                    );
+                    """, cancellationToken);
+                await RequireColumnsAsync(transaction, "document_snapshots",
+                    ["id", "project_id", "document_text_hash", "created_utc", "source_text_version"],
+                    cancellationToken);
+                await RequireColumnsAsync(transaction, "document_paragraphs",
+                    ["id", "snapshot_id", "ordinal", "role", "plain_text", "text_hash", "logical_key"],
+                    cancellationToken);
+                await RequireColumnsAsync(transaction, "ruby_annotations",
+                    ["id", "paragraph_id", "start_offset", "length", "base_text", "reading",
+                     "source", "confidence", "evidence", "status", "batch_id", "created_utc", "updated_utc"],
+                    cancellationToken);
+                await SetSchemaVersionAsync(transaction, 7, cancellationToken);
+            }
+
+            if (currentVersion < 8)
+            {
+                await AddColumnIfMissingAsync(
+                    transaction,
+                    "ocr_run_words",
+                    "automatic_role",
+                    "TEXT NOT NULL DEFAULT 'Body'",
+                    cancellationToken);
+                await ExecuteAsync(transaction, """
+                    CREATE TABLE IF NOT EXISTS ruby_unresolved_evidence_pages (
+                        unresolved_id TEXT NOT NULL
+                            REFERENCES ruby_unresolved_items(id) ON DELETE CASCADE,
+                        page_id TEXT NOT NULL REFERENCES pages(id) ON DELETE RESTRICT,
+                        page_marker TEXT NOT NULL,
+                        PRIMARY KEY(unresolved_id, page_marker)
+                    );
+                    """, cancellationToken);
+                await BackfillAutomaticOcrRolesAsync(transaction, cancellationToken);
+                await SetSchemaVersionAsync(transaction, 8, cancellationToken);
+            }
+
             var legacyMigration = _connection.CreateCommand();
             legacyMigration.Transaction = transaction;
             legacyMigration.CommandText = """
@@ -1367,6 +2489,61 @@ public sealed class SqliteProjectRepository : IAsyncDisposable
         return Convert.ToInt32(await command.ExecuteScalarAsync(cancellationToken), System.Globalization.CultureInfo.InvariantCulture);
     }
 
+    private async Task BackfillAutomaticOcrRolesAsync(
+        SqliteTransaction transaction,
+        CancellationToken cancellationToken)
+    {
+        var runIds = new List<Guid>();
+        var runs = _connection.CreateCommand();
+        runs.Transaction = transaction;
+        runs.CommandText = "SELECT id FROM ocr_runs WHERE engine = 'paddle' ORDER BY rowid;";
+        await using (var reader = await runs.ExecuteReaderAsync(cancellationToken))
+            while (await reader.ReadAsync(cancellationToken))
+                runIds.Add(Guid.Parse(reader.GetString(0)));
+
+        foreach (var runId in runIds)
+        {
+            var rows = new List<(int Ordinal, OcrWord Word)>();
+            var words = _connection.CreateCommand();
+            words.Transaction = transaction;
+            words.CommandText = """
+                SELECT ordinal, text, confidence, left_x, top_y, right_x, bottom_y
+                FROM ocr_run_words WHERE run_id = $runId ORDER BY ordinal;
+                """;
+            words.Parameters.AddWithValue("$runId", runId.ToString("D"));
+            await using (var reader = await words.ExecuteReaderAsync(cancellationToken))
+                while (await reader.ReadAsync(cancellationToken))
+                    rows.Add((
+                        reader.GetInt32(0),
+                        new OcrWord(
+                            reader.GetString(1),
+                            reader.GetDouble(2),
+                            reader.GetDouble(3),
+                            reader.GetDouble(4),
+                            reader.GetDouble(5),
+                            reader.GetDouble(6))));
+            var allWords = rows.Select(row => row.Word).ToArray();
+            var rubyCandidates = allWords
+                .Except(RubyFilter.ExcludeCandidates(allWords))
+                .ToHashSet();
+            foreach (var row in rows)
+            {
+                var update = _connection.CreateCommand();
+                update.Transaction = transaction;
+                update.CommandText = """
+                    UPDATE ocr_run_words SET automatic_role = $role
+                    WHERE run_id = $runId AND ordinal = $ordinal;
+                    """;
+                update.Parameters.AddWithValue(
+                    "$role",
+                    rubyCandidates.Contains(row.Word) ? "RubyCandidate" : "Body");
+                update.Parameters.AddWithValue("$runId", runId.ToString("D"));
+                update.Parameters.AddWithValue("$ordinal", row.Ordinal);
+                await update.ExecuteNonQueryAsync(cancellationToken);
+            }
+        }
+    }
+
     private async Task SetSchemaVersionAsync(SqliteTransaction transaction, int version, CancellationToken cancellationToken)
     {
         var command = _connection.CreateCommand();
@@ -1394,5 +2571,24 @@ public sealed class SqliteProjectRepository : IAsyncDisposable
         }
         if (exists) return;
         await ExecuteAsync(transaction, $"ALTER TABLE \"{table}\" ADD COLUMN \"{column}\" {definition};", cancellationToken);
+    }
+
+    private async Task RequireColumnsAsync(
+        SqliteTransaction transaction,
+        string table,
+        IReadOnlyList<string> requiredColumns,
+        CancellationToken cancellationToken)
+    {
+        var command = _connection.CreateCommand();
+        command.Transaction = transaction;
+        command.CommandText = $"PRAGMA table_info(\"{table}\");";
+        var actual = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        await using var reader = await command.ExecuteReaderAsync(cancellationToken);
+        while (await reader.ReadAsync(cancellationToken)) actual.Add(reader.GetString(1));
+        var missing = requiredColumns.Where(column => !actual.Contains(column)).ToArray();
+        if (missing.Length > 0)
+            throw new SqliteException(
+                $"Schema migration found incompatible table '{table}'. Missing columns: {string.Join(", ", missing)}.",
+                1);
     }
 }

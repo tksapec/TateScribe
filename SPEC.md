@@ -1,55 +1,22 @@
-# TateScribe Specification
+# TateScribe specification
 
-## Purpose
+TateScribe is an offline Windows application that turns Japanese vertical-book screenshots into reviewed text and deterministic publication artifacts.
 
-TateScribe is an offline Windows application that converts a user-selected sequence of smartphone screenshots of Japanese vertical e-books into an editable, horizontal DOCX. It preserves OCR evidence and never silently invents, removes, or rewrites source text.
+## ChatGPT-assisted work
 
-## Product constraints
+- `TextProofreading` compares OCR text with package images and returns TateScribe format 2 structured text. It never adds ruby or returns DOCX/EPUB/Markdown.
+- `RubyAnnotation` examines a frozen confirmed document and returns JSON conforming to `output-schema.json`. It never changes or reproduces the body.
+- The UI and both package types obtain instructions from `IChatGptPromptTemplateProvider`.
+- No ChatGPT API integration is included.
 
-- Windows 10/11 x64; .NET 8 WPF with MVVM and nullable references enabled.
-- All images, OCR results, text, and telemetry stay local. No network request is made while OCR runs.
-- A bundled Python 3.11 OCR worker communicates with the app only through UTF-8 JSON Lines on standard input/output. PaddleOCR is the primary adapter; Tesseract Japanese vertical is an optional adapter.
-- Original images are immutable. Per-project SQLite stores metadata, normalized crop regions, OCR evidence, revisions, and export settings; derived images are cache entries.
-- The default document is horizontal: body uses Word Normal, chapter/section/subsection use Heading 1/2/3, paragraph indentation is paragraph formatting, and ruby uses Word ruby XML. It does not reproduce the screenshot layout and never creates page breaks from screenshot boundaries.
-- Proofreading is a manual package exchange: TateScribe writes a versioned ZIP/folder for ChatGPT attachment and imports a marker-preserving result only after local validation. It never calls an AI API or transmits project data.
+## Ruby
 
-## Functional behaviour
+`RubyPolicy` is `PreserveOriginalOnly` by default. OCR `RubyCandidate` regions are evidence; imported proposals remain separate until the user confirms them. Only `Confirmed` annotations reach DOCX or Denden output. Body changes make the associated batch and annotations stale.
 
-1. Import PNG, JPEG, WebP, clipboard images, folders, and drag-dropped files. Record source metadata and SHA-256, then order pages by embedded filename timestamp, EXIF time, created time, modified time, and natural filename order.
-2. Allow manual order, inclusion, rotation, crop, and reusable top/bottom exclusion profiles. Flag, but never auto-resolve, duplicate, missing, and contradictory page-order candidates.
-3. Preprocess images locally with OpenCV; classify page/region candidates; keep possible body text unless the user explicitly excludes it.
-4. Store OCR words with polygons, confidence, engine/model/version, source image and crop. Read vertical text as columns right-to-left and characters top-to-bottom. Preserve column and screenshot boundaries as direct joins by default.
-5. Keep low-confidence, ruby, title, illustration/caption, duplicate, paragraph, and scene-break decisions reviewable. Re-OCR must not overwrite manual text or structural edits.
-6. Provide a project workspace with thumbnail list, image/crop review, OCR/evidence review, text/structure editing, issue list, and export status.
-7. Export DOCX without Word installed, plus optional plain text, OCR JSON, and issue CSV. Do not export screenshot-boundary markers, screenshots, captions, or image-contained text as body text.
-8. Retain Raw Paddle words and coordinates, Raw Tesseract text, merge proposals, manual text, and confirmed text independently. Confirmed text wins over manual, proposed, and reconstructed drafts.
-9. Require matching project and batch identifiers for proofreading imports; validate page markers, range, order, structure, and unusually large text deltas before any confirmed text is saved.
+The authoritative model is a `StructuredDocument` with stable persisted paragraph IDs, roles, ordered text/ruby inlines, text hashes, and source spans. Applying ruby must not change the plain body text.
 
-## Acceptance criteria
+## Output
 
-- A project can be created, saved, reopened, populated by image files, reordered, and exported without modifying sources.
-- OCR worker failures are visible and retryable; cancellation leaves persisted completed work intact.
-- Unit tests cover ordering, normalized coordinate conversion, vertical ordering, direct joining, paragraph heuristics, document styles/ruby XML, retained manual edits, persistence, and worker failure handling.
-- A self-contained win-x64 package and setup/build/test/package scripts are produced. Dependency and model versions are recorded in `THIRD_PARTY.md`.
+TateScribe generates schema-valid multi-ruby DOCX and deterministic Denden Converter folders. Denden text is UTF-8 without BOM with LF line endings and fixed ordering. EPUB generation is outside this phase.
 
-## Proofreading package version 2
-
-- Export text priority is the active Confirmed value, Manual, Suggested, then reconstructed RawPaddle. A Manual save newer than the latest Confirmed version makes that older confirmation historical rather than active.
-- `manifest.json` records `textSource` and the baseline text hash for every page.
-- Only text between one `TEXT_BEGIN` / `TEXT_END` pair per PAGE is imported.
-- Reports are enclosed by `REPORT_BEGIN` / `REPORT_END` and are never imported as page text.
-- Missing, duplicate, nested, or out-of-block structural markers are rejected.
-- A single Markdown fence around the complete document is accepted without stripping ordinary `[[...]]` body text.
-- Version 1 remains import-compatible; all new exports use version 2.
-- Leading full-width/half-width spaces and internal/trailing paragraph boundaries are preserved.
-- Every format 2 page requires one `JOIN_TO_NEXT` after `TEXT_END`; it supports DirectJoin, SpaceJoin, ParagraphBreak, SceneBreak, and Uncertain.
-
-## State, history, and stale imports
-
-OCR execution state is stored independently from proofreading state. Re-OCR retains ManualText and ConfirmedText and marks previously proofread content Stale. Cancellation restores the page's pre-run OCR state. Manual and Confirmed saves append typed versions with timestamps and sources, suppressing consecutive identical versions.
-
-Export snapshots contain image hash, baseline text hash/source, crop, rotation, PageRole, DisplayProfile, sort order, and OCR run. Image changes and missing/excluded pages are blocking errors. Baseline/OCR/order/crop/rotation/role/profile changes are page warnings requiring explicit acceptance.
-
-## Page review and DOCX
-
-FixedPageVertical printed numbers are validated for duplicates, reversal, gaps, and nonnumeric values whenever project/page metadata changes. RubyCandidate role and draft inclusion are user-editable and persist across matching re-OCR words. Illustration and Blank are excluded from DOCX; text-bearing Other pages are included after confirmation. Required DOCX styles are Normal, Heading1/2/3, SectionNumber, and SceneBreak.
+Compatibility with existing project databases, proofreading format 1/2, legacy `ExportDocument`, page roles, boundary joins, and existing OCR/manual/confirmed layers is required.

@@ -17,6 +17,9 @@ using TateScribe.Infrastructure.Storage;
 using TateScribe.Core.Proofreading;
 using TateScribe.Infrastructure.Proofreading;
 using TateScribe.App.Services;
+using TateScribe.Core.Denden;
+using TateScribe.Core.Ruby;
+using TateScribe.Infrastructure.Denden;
 
 namespace TateScribe.App;
 
@@ -32,6 +35,8 @@ public partial class MainWindow : Window
         InitializeComponent();
         DisplayProfileSelector.ItemsSource = Enum.GetValues<DisplayProfile>();
         PageRoleSelector.ItemsSource = Enum.GetValues<PageRole>();
+        RubyPolicySelector.ItemsSource = Enum.GetValues<RubyPolicy>();
+        RubyPolicySelector.SelectedItem = RubyPolicy.PreserveOriginalOnly;
     }
 
     private async void CreateProject(object sender, RoutedEventArgs e)
@@ -371,29 +376,201 @@ public partial class MainWindow : Window
         }
     }
 
+    private async void ExportRubyPackage(object sender, RoutedEventArgs e)
+    {
+        if (_projectDirectory is null || _pages.Count == 0) return;
+        var included = _pages.Where(page => page.IsIncluded
+                && page.PageRole is not (PageRole.Illustration or PageRole.Blank))
+            .OrderBy(page => page.SortOrder).ToArray();
+        if (included.Length == 0)
+        {
+            MessageBox.Show(this, "ルビ確認用パッケージへ出力できる本文ページがありません。",
+                "TateScribe", MessageBoxButton.OK, MessageBoxImage.Warning);
+            return;
+        }
+        await using (var repository = await SqliteProjectRepository.CreateAsync(_projectDirectory, CancellationToken.None))
+        {
+            var unproofread = 0;
+            foreach (var page in included)
+                if ((await repository.LoadPageTextStateAsync(page.Id, CancellationToken.None)).ConfirmedText is null)
+                    unproofread++;
+            if (unproofread > 0 && MessageBox.Show(this,
+                $"本文校正が完了していないページが {unproofread} 件あります。未確定本文でルビ確認用パッケージを出力しますか？",
+                "本文校正前のルビ確認", MessageBoxButton.YesNo, MessageBoxImage.Warning) != MessageBoxResult.Yes)
+                return;
+        }
+        var dialog = new OpenFolderDialog { Title = "ルビ確認用パッケージの親フォルダーを選択" };
+        if (dialog.ShowDialog(this) != true) return;
+        var destination = Path.Combine(dialog.FolderName, $"TateScribe-Ruby-{DateTime.Now:yyyyMMdd-HHmmss}");
+        try
+        {
+            IsEnabled = false;
+            var policy = RubyPolicySelector.SelectedItem is RubyPolicy selected
+                ? selected : RubyPolicy.PreserveOriginalOnly;
+            var result = await new RubyWorkflowService().ExportPackageAsync(
+                _projectDirectory, _pages, policy, destination, CancellationToken.None);
+            MessageBox.Show(this,
+                $"ルビ確認用パッケージをフォルダーへ出力しました。ZIPは作成していません。{Environment.NewLine}{destination}{Environment.NewLine}Batch: {result.BatchId:D}",
+                "TateScribe", MessageBoxButton.OK, MessageBoxImage.Information);
+        }
+        catch (Exception exception)
+        {
+            MessageBox.Show(this, exception.Message, "ルビ確認用パッケージを出力できません", MessageBoxButton.OK, MessageBoxImage.Error);
+        }
+        finally
+        {
+            IsEnabled = true;
+        }
+    }
+
+    private async void ImportRubyJson(object sender, RoutedEventArgs e)
+    {
+        if (_projectDirectory is null) return;
+        var dialog = new OpenFileDialog { Filter = "ルビJSON|*.json" };
+        if (dialog.ShowDialog(this) != true) return;
+        try
+        {
+            var service = new RubyWorkflowService();
+            var result = await service.PrepareImportAsync(_projectDirectory, dialog.FileName, CancellationToken.None);
+            var errors = result.Preview.Issues.Where(issue => issue.IsError).ToArray();
+            if (errors.Length > 0 || result.Preview.Result is null)
+            {
+                MessageBox.Show(this,
+                    $"検証エラーのためDBは変更しません。{Environment.NewLine}{string.Join(Environment.NewLine, errors.Select(issue => $"・{issue.Message}"))}",
+                    "ルビJSONの検証", MessageBoxButton.OK, MessageBoxImage.Warning);
+                return;
+            }
+            RubyReviewWindow? review = null;
+            review = new RubyReviewWindow(result.Batch.Document, result.Preview, result.Batch.OcrCandidates, marker =>
+            {
+                if (result.Batch.PageIdsByMarker.TryGetValue(marker, out var pageId)
+                    && _pages.SingleOrDefault(page => page.Id == pageId) is { } page)
+                {
+                    PageList.SelectedItem = page;
+                    PageList.ScrollIntoView(PageList.SelectedItem);
+                    new PageReviewWindow(_projectDirectory, page) { Owner = review }.ShowDialog();
+                }
+            }) { Owner = this };
+            if (review.ShowDialog() != true) return;
+            var validated = service.ValidateReviewed(result.Batch, review.ReviewedDocument);
+            if (!validated.IsValid)
+            {
+                MessageBox.Show(this,
+                    $"編集後の候補に検証エラーがあります。DBは変更しません。{Environment.NewLine}{string.Join(Environment.NewLine, validated.Issues.Where(issue => issue.IsError).Select(issue => $"・{issue.Message}"))}",
+                    "ルビ候補の検証", MessageBoxButton.OK, MessageBoxImage.Warning);
+                return;
+            }
+            await service.SaveImportAsync(_projectDirectory,
+                result with { Preview = validated }, CancellationToken.None);
+            ReviewStatus.Text = $"ルビ候補 {review.ReviewedDocument.Annotations.Count} 件の確認結果を保存しました。";
+        }
+        catch (Exception exception)
+        {
+            MessageBox.Show(this, exception.Message, "ルビJSONを取り込めません", MessageBoxButton.OK, MessageBoxImage.Error);
+        }
+    }
+
+    private async void ReviewSavedRuby(object sender, RoutedEventArgs e)
+    {
+        if (_projectDirectory is null) return;
+        try
+        {
+            var service = new RubyWorkflowService();
+            var result = await service.LoadLatestReviewAsync(_projectDirectory, CancellationToken.None);
+            if (result is null || result.Preview.Result is null)
+            {
+                MessageBox.Show(this, "保存済みのルビ候補はありません。先にルビJSONを取り込んでください。",
+                    "TateScribe", MessageBoxButton.OK, MessageBoxImage.Information);
+                return;
+            }
+            RubyReviewWindow? review = null;
+            review = new RubyReviewWindow(result.Batch.Document, result.Preview, result.Batch.OcrCandidates, marker =>
+            {
+                if (result.Batch.PageIdsByMarker.TryGetValue(marker, out var pageId)
+                    && _pages.SingleOrDefault(page => page.Id == pageId) is { } page)
+                {
+                    PageList.SelectedItem = page;
+                    PageList.ScrollIntoView(PageList.SelectedItem);
+                    new PageReviewWindow(_projectDirectory, page) { Owner = review }.ShowDialog();
+                }
+            }) { Owner = this };
+            if (review.ShowDialog() != true) return;
+            var validated = service.ValidateReviewed(result.Batch, review.ReviewedDocument);
+            if (!validated.IsValid)
+            {
+                MessageBox.Show(this,
+                    string.Join(Environment.NewLine, validated.Issues.Where(issue => issue.IsError).Select(issue => $"・{issue.Message}")),
+                    "編集後のルビ候補に検証エラーがあります", MessageBoxButton.OK, MessageBoxImage.Warning);
+                return;
+            }
+            await service.SaveReviewAsync(_projectDirectory,
+                result with { Preview = validated }, CancellationToken.None);
+            ReviewStatus.Text = "保存済みルビ候補の確認結果を更新しました。";
+        }
+        catch (Exception exception)
+        {
+            MessageBox.Show(this, exception.Message, "保存済みルビ候補を開けません", MessageBoxButton.OK, MessageBoxImage.Error);
+        }
+    }
+
     private async void ExportDocx(object sender, RoutedEventArgs e)
     {
         if (_projectDirectory is null || _pages.Count == 0) return;
         try
         {
             IsEnabled = false;
-            var preparation = await new DocumentExportService().PrepareAsync(
+            var preparation = await new DocumentExportService().PrepareStructuredAsync(
                 _projectDirectory, _pages, PageBreakBeforeChapters.IsChecked == true, CancellationToken.None);
-            if (preparation.OtherPagesWithText.Count > 0
+            if (preparation.LegacyPreparation.OtherPagesWithText.Count > 0
                 && MessageBox.Show(this,
-                    $"PageRole=Other の本文ページ {preparation.OtherPagesWithText.Count} 件を含めます。続行しますか？",
+                    $"PageRole=Other の本文ページ {preparation.LegacyPreparation.OtherPagesWithText.Count} 件を含めます。続行しますか？",
                     "Otherページの確認", MessageBoxButton.YesNo, MessageBoxImage.Warning) != MessageBoxResult.Yes) return;
-            if (preparation.UnproofreadPageCount > 0 && MessageBox.Show(this, $"未校正ページ {preparation.UnproofreadPageCount} 件を含めてDOCXを出力します。続行しますか？", "未校正本文を含む出力", MessageBoxButton.YesNo, MessageBoxImage.Warning) != MessageBoxResult.Yes) return;
+            if (preparation.LegacyPreparation.UnproofreadPageCount > 0 && MessageBox.Show(this, $"未校正ページ {preparation.LegacyPreparation.UnproofreadPageCount} 件を含めてDOCXを出力します。続行しますか？", "未校正本文を含む出力", MessageBoxButton.YesNo, MessageBoxImage.Warning) != MessageBoxResult.Yes) return;
             var outputPath = BookFolderPaths.GetDocumentPath(_projectDirectory);
-            await new OpenXmlDocumentExporter().ExportAsync(preparation.Document, outputPath, CancellationToken.None);
-            var summary = preparation.EmptyPageCount == 0
-                ? $"{preparation.IncludedPageCount} ページを出力しました。"
-                : $"{preparation.IncludedPageCount} ページを出力し、本文のない {preparation.EmptyPageCount} ページを除外しました。";
+            await new OpenXmlDocumentExporter().ExportAsync(preparation.Document, outputPath,
+                PageBreakBeforeChapters.IsChecked == true, "游明朝", CancellationToken.None);
+            var summary = preparation.LegacyPreparation.EmptyPageCount == 0
+                ? $"{preparation.LegacyPreparation.IncludedPageCount} ページを出力しました。"
+                : $"{preparation.LegacyPreparation.IncludedPageCount} ページを出力し、本文のない {preparation.LegacyPreparation.EmptyPageCount} ページを除外しました。";
             MessageBox.Show(this, $"DOCXを出力しました。{Environment.NewLine}{summary}{Environment.NewLine}{outputPath}", "TateScribe", MessageBoxButton.OK, MessageBoxImage.Information);
         }
         catch (Exception exception)
         {
             MessageBox.Show(this, exception.Message, "DOCX出力に失敗しました", MessageBoxButton.OK, MessageBoxImage.Error);
+        }
+        finally
+        {
+            IsEnabled = true;
+        }
+    }
+
+    private async void ExportDenden(object sender, RoutedEventArgs e)
+    {
+        if (_projectDirectory is null || _pages.Count == 0) return;
+        var settings = new DendenExportWindow(Path.GetFileName(Path.TrimEndingDirectorySeparator(_projectDirectory)))
+        {
+            Owner = this,
+        };
+        if (settings.ShowDialog() != true || settings.Options is null) return;
+        var folder = new OpenFolderDialog { Title = "でんでん用データの親フォルダーを選択" };
+        if (folder.ShowDialog(this) != true) return;
+        var destination = Path.Combine(folder.FolderName, "DendenExport");
+        try
+        {
+            IsEnabled = false;
+            var preparation = await new DocumentExportService().PrepareStructuredAsync(
+                _projectDirectory, _pages, false, CancellationToken.None);
+            await new DendenExportService().ExportAsync(
+                preparation.Document, settings.Options, destination, CancellationToken.None);
+            if (settings.CoverPath is not null)
+                File.Copy(settings.CoverPath, Path.Combine(destination, "cover.jpg"), overwrite: false);
+            MessageBox.Show(this,
+                $"でんでんコンバーター用データを出力しました。EPUB・ZIPは作成していません。{Environment.NewLine}{destination}",
+                "TateScribe", MessageBoxButton.OK, MessageBoxImage.Information);
+        }
+        catch (Exception exception)
+        {
+            MessageBox.Show(this, exception.Message, "でんでん用データを出力できません", MessageBoxButton.OK, MessageBoxImage.Error);
         }
         finally
         {

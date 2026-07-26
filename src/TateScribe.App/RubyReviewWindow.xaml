@@ -1,0 +1,97 @@
+<Window x:Class="TateScribe.App.RubyReviewWindow"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        Title="ルビ候補の確認"
+        Width="980"
+        Height="680"
+        MinWidth="760"
+        MinHeight="520"
+        WindowStartupLocation="CenterOwner"
+        ShowInTaskbar="False">
+  <Grid Margin="16">
+    <Grid.RowDefinitions>
+      <RowDefinition Height="Auto" />
+      <RowDefinition Height="*" />
+      <RowDefinition Height="150" />
+      <RowDefinition Height="Auto" />
+      <RowDefinition Height="Auto" />
+    </Grid.RowDefinitions>
+
+    <TextBlock x:Name="SummaryText" Margin="0,0,0,10" TextWrapping="Wrap" />
+
+    <TabControl Grid.Row="1">
+      <TabItem Header="ルビ候補">
+        <DataGrid x:Name="AnnotationGrid"
+                  AutoGenerateColumns="False"
+                  CanUserAddRows="False"
+                  SelectionMode="Single"
+                  SelectionChanged="AnnotationSelectionChanged">
+          <DataGrid.Columns>
+            <DataGridTextColumn Header="状態" Binding="{Binding Status}" IsReadOnly="True" Width="90" />
+            <DataGridTextColumn Header="親文字" Binding="{Binding BaseText}" IsReadOnly="True" Width="110" />
+            <DataGridTextColumn Header="読み（編集可）" Binding="{Binding Reading}" Width="130" />
+            <DataGridTextColumn Header="開始" Binding="{Binding Start}" Width="60" />
+            <DataGridTextColumn Header="長さ" Binding="{Binding Length}" Width="60" />
+            <DataGridTextColumn Header="根拠" Binding="{Binding Source}" IsReadOnly="True" Width="130" />
+            <DataGridTextColumn Header="信頼度" Binding="{Binding Confidence}" IsReadOnly="True" Width="75" />
+            <DataGridTextColumn Header="ページ" Binding="{Binding PageMarkers}" IsReadOnly="True" Width="100" />
+            <DataGridTextColumn Header="注意・同一表記の読み" Binding="{Binding Warning}" IsReadOnly="True" Width="*" />
+          </DataGrid.Columns>
+        </DataGrid>
+      </TabItem>
+      <TabItem Header="未確定">
+        <DataGrid x:Name="UnresolvedGrid"
+                  AutoGenerateColumns="False"
+                  CanUserAddRows="False"
+                  IsReadOnly="True">
+          <DataGrid.Columns>
+            <DataGridTextColumn Header="親文字" Binding="{Binding BaseText}" Width="120" />
+            <DataGridTextColumn Header="開始" Binding="{Binding Start}" Width="60" />
+            <DataGridTextColumn Header="長さ" Binding="{Binding Length}" Width="60" />
+            <DataGridTextColumn Header="ページ" Binding="{Binding PageMarkers}" Width="110" />
+            <DataGridTextColumn Header="未確定の理由" Binding="{Binding Reason}" Width="*" />
+          </DataGrid.Columns>
+        </DataGrid>
+      </TabItem>
+    </TabControl>
+
+    <Grid Grid.Row="2" Margin="0,10,0,0">
+      <Grid.ColumnDefinitions>
+        <ColumnDefinition Width="2*" />
+        <ColumnDefinition Width="12" />
+        <ColumnDefinition Width="*" />
+      </Grid.ColumnDefinitions>
+      <TextBox x:Name="ParagraphText"
+               IsReadOnly="True"
+               AcceptsReturn="True"
+               TextWrapping="Wrap"
+               VerticalScrollBarVisibility="Auto"
+               ToolTip="本文はこの画面では変更できません。選択中の親文字範囲を選択表示します。" />
+      <TextBox x:Name="EvidenceText"
+               Grid.Column="2"
+               IsReadOnly="True"
+               AcceptsReturn="True"
+               TextWrapping="Wrap"
+               VerticalScrollBarVisibility="Auto"
+               ToolTip="ChatGPTが返した根拠と検証上の注意を表示します。" />
+    </Grid>
+
+    <StackPanel Grid.Row="3" Orientation="Horizontal" Margin="0,10,0,0">
+      <Button Padding="12,6" Margin="0,0,8,0" Click="AcceptSelected"
+              ToolTip="選択候補を確定し、DOCX／でんでん出力で使用できる状態にします。">選択を確定</Button>
+      <Button Padding="12,6" Margin="0,0,8,0" Click="RejectSelected"
+              ToolTip="選択候補を却下します。本文は変わりません。">選択を却下</Button>
+      <Button Padding="12,6" Margin="0,0,8,0" Click="ConfirmImageBased"
+              ToolTip="原画像上のルビを根拠とするImageConfirmed候補だけを一括確定します。">画像根拠だけ一括確定</Button>
+      <Button Padding="12,6" Margin="0,0,8,0" Click="ConfirmTextBased"
+              ToolTip="本文中に読みが明記されたTextConfirmed候補だけを一括確定します。">本文根拠だけ一括確定</Button>
+      <Button Padding="12,6" Click="ShowEvidencePage"
+              ToolTip="選択候補の根拠ページをメイン画面で表示します。座標付きOCR候補は「本文履歴・ルビ候補」で確認できます。">根拠ページを表示</Button>
+    </StackPanel>
+
+    <StackPanel Grid.Row="4" Orientation="Horizontal" HorizontalAlignment="Right" Margin="0,12,0,0">
+      <Button Padding="14,7" Margin="0,0,8,0" Click="SaveReview" IsDefault="True">確認結果を保存</Button>
+      <Button Padding="14,7" Click="CancelReview" IsCancel="True">キャンセル</Button>
+    </StackPanel>
+  </Grid>
+</Window>

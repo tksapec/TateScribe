@@ -2,11 +2,15 @@ using DocumentFormat.OpenXml;
 using DocumentFormat.OpenXml.Packaging;
 using DocumentFormat.OpenXml.Wordprocessing;
 using TateScribe.Core.Export;
+using TateScribe.Core.Ruby;
 
 namespace TateScribe.Infrastructure.Export;
 
-public sealed class OpenXmlDocumentExporter : IDocumentExporter
+public sealed class OpenXmlDocumentExporter : IDocumentExporter, IStructuredDocumentExporter
 {
+    public int RubyFontSizeHalfPoints { get; init; } = 10;
+    public int RubyRaiseHalfPoints { get; init; } = 10;
+
     public Task ExportAsync(ExportDocument document, string destinationPath, CancellationToken cancellationToken)
     {
         cancellationToken.ThrowIfCancellationRequested();
@@ -33,7 +37,56 @@ public sealed class OpenXmlDocumentExporter : IDocumentExporter
             }
             else
             {
-                paragraph.Append(CreateRuby(item.Ruby));
+                paragraph.Append(new Run(CreateRuby(item.Ruby)));
+            }
+            mainPart.Document.Body!.Append(paragraph);
+        }
+        mainPart.Document.Body!.Append(new SectionProperties(
+            new PageSize { Width = 11906U, Height = 16838U },
+            new PageMargin { Top = 1134, Right = 1134U, Bottom = 1134, Left = 1134U, Header = 708U, Footer = 708U, Gutter = 0U }));
+        mainPart.Document.Save();
+        return Task.CompletedTask;
+    }
+
+    public Task ExportAsync(
+        StructuredDocument document,
+        string destinationPath,
+        bool pageBreakBeforeChapters,
+        string japaneseFontName,
+        CancellationToken cancellationToken)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        var parent = Path.GetDirectoryName(destinationPath);
+        if (!string.IsNullOrEmpty(parent)) Directory.CreateDirectory(parent);
+        using var word = WordprocessingDocument.Create(destinationPath, WordprocessingDocumentType.Document);
+        var mainPart = word.AddMainDocumentPart();
+        mainPart.Document = new Document(new Body());
+        AddStyles(mainPart, japaneseFontName);
+        foreach (var item in document.Paragraphs)
+        {
+            var styleId = item.Role switch
+            {
+                DocumentElementRole.ChapterTitle => "Heading1",
+                DocumentElementRole.SectionTitle => "Heading2",
+                DocumentElementRole.SectionNumber => "SectionNumber",
+                DocumentElementRole.SceneBreak => "SceneBreak",
+                _ => "Normal",
+            };
+            var properties = new ParagraphProperties(new ParagraphStyleId { Val = styleId });
+            if (pageBreakBeforeChapters && item.Role == DocumentElementRole.ChapterTitle)
+                properties.Append(new PageBreakBefore());
+            var paragraph = new Paragraph(properties);
+            foreach (var inline in item.Inlines)
+            {
+                switch (inline)
+                {
+                    case TextInline text:
+                        paragraph.Append(new Run(new Text(text.Text) { Space = SpaceProcessingModeValues.Preserve }));
+                        break;
+                    case RubyInline ruby:
+                        paragraph.Append(new Run(CreateRuby(new RubyAnnotation(ruby.BaseText, ruby.Reading))));
+                        break;
+                }
             }
             mainPart.Document.Body!.Append(paragraph);
         }
@@ -97,12 +150,14 @@ public sealed class OpenXmlDocumentExporter : IDocumentExporter
         return style;
     }
 
-    private static OpenXmlElement CreateRuby(RubyAnnotation ruby)
-    {
-        var element = new OpenXmlUnknownElement("w", "ruby", "http://schemas.openxmlformats.org/wordprocessingml/2006/main");
-        element.InnerXml = $"<w:rubyPr xmlns:w=\"http://schemas.openxmlformats.org/wordprocessingml/2006/main\"/><w:rt xmlns:w=\"http://schemas.openxmlformats.org/wordprocessingml/2006/main\"><w:r><w:t>{Escape(ruby.RubyText)}</w:t></w:r></w:rt><w:rubyBase xmlns:w=\"http://schemas.openxmlformats.org/wordprocessingml/2006/main\"><w:r><w:t>{Escape(ruby.ParentText)}</w:t></w:r></w:rubyBase>";
-        return element;
-    }
-
-    private static string Escape(string value) => System.Security.SecurityElement.Escape(value) ?? string.Empty;
+    private OpenXmlElement CreateRuby(RubyAnnotation ruby) =>
+        new DocumentFormat.OpenXml.Wordprocessing.Ruby(
+            new RubyProperties(
+                new RubyAlign { Val = RubyAlignValues.Center },
+                new PhoneticGuideTextFontSize { Val = RubyFontSizeHalfPoints.ToString(System.Globalization.CultureInfo.InvariantCulture) },
+                new PhoneticGuideRaise { Val = checked((short)RubyRaiseHalfPoints) },
+                new PhoneticGuideBaseTextSize { Val = "21" },
+                new LanguageId { Val = "ja-JP" }),
+            new RubyContent(new Run(new Text(ruby.RubyText) { Space = SpaceProcessingModeValues.Preserve })),
+            new RubyBase(new Run(new Text(ruby.ParentText) { Space = SpaceProcessingModeValues.Preserve })));
 }

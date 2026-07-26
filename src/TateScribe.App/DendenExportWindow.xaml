@@ -1,0 +1,55 @@
+<Window x:Class="TateScribe.App.DendenExportWindow"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        Title="でんでん用データの設定"
+        Width="520"
+        Height="560"
+        MinWidth="440"
+        MinHeight="500"
+        WindowStartupLocation="CenterOwner"
+        ShowInTaskbar="False">
+  <ScrollViewer VerticalScrollBarVisibility="Auto">
+    <Grid Margin="18">
+      <Grid.RowDefinitions>
+        <RowDefinition Height="Auto" /><RowDefinition Height="Auto" />
+        <RowDefinition Height="Auto" /><RowDefinition Height="Auto" />
+        <RowDefinition Height="Auto" /><RowDefinition Height="Auto" />
+        <RowDefinition Height="Auto" /><RowDefinition Height="Auto" />
+        <RowDefinition Height="Auto" /><RowDefinition Height="Auto" />
+        <RowDefinition Height="Auto" /><RowDefinition Height="Auto" />
+      </Grid.RowDefinitions>
+      <Grid.ColumnDefinitions>
+        <ColumnDefinition Width="150" /><ColumnDefinition Width="*" />
+      </Grid.ColumnDefinitions>
+
+      <TextBlock VerticalAlignment="Center" Text="書名" />
+      <TextBox x:Name="TitleEditor" Grid.Column="1" Margin="8,3" />
+      <TextBlock Grid.Row="1" VerticalAlignment="Center" Text="著者" />
+      <TextBox x:Name="CreatorEditor" Grid.Row="1" Grid.Column="1" Margin="8,3" />
+      <TextBlock Grid.Row="2" VerticalAlignment="Center" Text="言語" />
+      <TextBox x:Name="LanguageEditor" Grid.Row="2" Grid.Column="1" Margin="8,3" Text="ja" />
+      <TextBlock Grid.Row="3" VerticalAlignment="Center" Text="文字方向" />
+      <ComboBox x:Name="DirectionSelector" Grid.Row="3" Grid.Column="1" Margin="8,3" SelectedIndex="0">
+        <ComboBoxItem Content="縦書き（右から左）" Tag="rtl" />
+        <ComboBoxItem Content="横書き（左から右）" Tag="ltr" />
+      </ComboBox>
+      <TextBlock Grid.Row="4" VerticalAlignment="Center" Text="表紙画像" />
+      <StackPanel Grid.Row="4" Grid.Column="1" Orientation="Horizontal" Margin="8,3">
+        <TextBox x:Name="CoverPathEditor" Width="245" IsReadOnly="True" />
+        <Button Margin="6,0,0,0" Padding="8,3" Click="ChooseCover">選択</Button>
+      </StackPanel>
+      <CheckBox x:Name="TitlePageCheck" Grid.Row="5" Grid.ColumnSpan="2" Margin="0,8,0,3" IsChecked="True">扉ページを生成</CheckBox>
+      <CheckBox x:Name="TocCheck" Grid.Row="6" Grid.ColumnSpan="2" Margin="0,3" IsChecked="True">目次を生成</CheckBox>
+      <TextBlock Grid.Row="7" VerticalAlignment="Center" Text="目次深度" />
+      <TextBox x:Name="TocDepthEditor" Grid.Row="7" Grid.Column="1" Width="70" HorizontalAlignment="Left" Margin="8,3" Text="2" />
+      <CheckBox x:Name="AutoTcyCheck" Grid.Row="8" Grid.ColumnSpan="2" Margin="0,3" IsChecked="True">自動縦中横</CheckBox>
+      <TextBlock Grid.Row="9" VerticalAlignment="Center" Text="縦中横の数字桁数" />
+      <TextBox x:Name="TcyDigitsEditor" Grid.Row="9" Grid.Column="1" Width="70" HorizontalAlignment="Left" Margin="8,3" Text="2" />
+      <CheckBox x:Name="SplitChapterCheck" Grid.Row="10" Grid.ColumnSpan="2" Margin="0,3">章単位でファイルを分割</CheckBox>
+      <StackPanel Grid.Row="11" Grid.ColumnSpan="2" Orientation="Horizontal" HorizontalAlignment="Right" Margin="0,16,0,0">
+        <Button Padding="14,7" Margin="0,0,8,0" Click="Accept" IsDefault="True">出力先を選ぶ</Button>
+        <Button Padding="14,7" Click="Cancel" IsCancel="True">キャンセル</Button>
+      </StackPanel>
+    </Grid>
+  </ScrollViewer>
+</Window>

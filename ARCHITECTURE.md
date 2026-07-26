@@ -45,10 +45,27 @@ public interface IDocumentExporter
 - `DocumentExportService` applies PageRole policy and boundary joins before Open XML generation.
 - `PageValidationService` is a pure Core validator; SQLite stores its results in `review_items`.
 
-SQLite schema version 6 adds independent OCR status, last/baseline OCR run identifiers, export snapshots, text-version baselines, OCR failures, persistent ReviewItems, OCR word overrides, and boundary join type. Migrations inspect columns with `PRAGMA table_info`, run in one transaction, and only advance `schema_version` after success.
+SQLite schema version 8 includes the version 6 OCR/proofreading state plus structured document snapshots, stable paragraphs, source spans, ruby batches, evidence snapshots, annotations, unresolved items, unresolved evidence pages, and each OCR word's original automatic role. Migrations inspect columns with `PRAGMA table_info`, run in one transaction, and only advance `schema_version` after success.
 
 The Python worker remains offline and process-local. PaddleOCR is lazily cached by detection/recognition model directories; Tesseract does not initialize Paddle. Restarting or cancelling the worker discards the process cache safely.
 - UI commands are asynchronous and cancelable; only ViewModels touch UI dispatching.
 - OCR JSON uses a versioned envelope with one request and one terminal response per line. Unknown fields are ignored; malformed or unexpected responses fail the request with a retry action.
 - The database owns user changes. Cache and worker files are disposable and excluded from source control.
 - Detection makes recommendations only. No content, page order, crop, structural break, or duplicate decision is applied silently.
+## Structured document and ruby
+
+`TateScribe.Core.Ruby` defines the authoritative ruby-aware document model. A `StructuredDocument` contains stable, persisted paragraph IDs. Each paragraph contains ordered `TextInline` and `RubyInline` elements plus a text hash and source-page spans. Concatenating the base text of those inlines always reproduces the original paragraph text.
+
+OCR `RubyCandidate` regions remain OCR evidence and are never treated as final ruby. ChatGPT imports become `RubyAnnotationProposal` records. Only user-confirmed annotations are composed into structured paragraphs. Manual or imported body changes mark affected batches and annotations stale.
+
+SQLite schema version 8 adds document snapshots, paragraphs, provenance spans, ruby batches and evidence snapshots, annotations, annotation/unresolved evidence pages, and the automatic OCR role used to distinguish a true RubyCandidate-to-Body return. Migrations run in the existing initialization transaction. Paragraph logical keys persist independently from displayed text so ordinary text corrections can retain the same paragraph ID.
+
+## ChatGPT boundary
+
+TateScribe does not call the ChatGPT API. `ChatGptPromptTemplateProvider` is the single source for both the prompt window and package `instructions.md`. Text proofreading returns TateScribe format 2 structured text. Ruby annotation returns schema-constrained JSON and cannot change body text. TateScribe alone generates DOCX and Denden Converter input.
+
+## Deterministic exporters
+
+`OpenXmlDocumentExporter` supports the legacy export contract and the structured multi-ruby contract. Structured ruby is written as schema-valid WordprocessingML, while the existing paragraph styles and chapter page-break option remain intact.
+
+`DendenExportService` writes UTF-8 without BOM, LF line endings, fixed file/property ordering, inline ruby, and escaped markup. It does not generate EPUB or ZIP.

@@ -1,6 +1,7 @@
 using System.IO.Compression;
 using System.Text.Json;
 using TateScribe.Core.Ocr;
+using TateScribe.Core.ChatGpt;
 using TateScribe.Core.Proofreading;
 using TateScribe.Core.Projects;
 using TateScribe.Infrastructure.Proofreading;
@@ -13,6 +14,26 @@ public sealed class ProofreadingPackageTests : IDisposable
     private readonly string _directory = Path.Combine(Path.GetTempPath(), "TateScribeTests", Guid.NewGuid().ToString("N"));
 
     [Fact]
+    [Trait("Category", "SlowZip")]
+    public async Task Zip_export_creates_a_readable_archive_when_explicitly_requested()
+    {
+        Directory.CreateDirectory(_directory);
+        var source = Path.Combine(_directory, "zip-source.png");
+        await File.WriteAllBytesAsync(source, [1, 2, 3]);
+        var output = Path.Combine(_directory, "proofreading.zip");
+
+        await new ProofreadingPackageExporter().ExportAsync(
+            new ProofreadingPackageRequest(Guid.NewGuid(), "Book", Guid.NewGuid(), output,
+                ProofreadingPackageFormat.Zip,
+                [new ProofreadingPackagePage(Guid.NewGuid(), 0, "zip-source.png", "hash", source,
+                    null, "本文", null, 0, "Body", "ReflowVertical")]),
+            CancellationToken.None);
+
+        using var archive = ZipFile.OpenRead(output);
+        Assert.Contains(archive.Entries, entry => entry.FullName == "ocr.txt");
+    }
+
+    [Fact]
     public async Task Export_writes_stable_page_files_manifest_and_provenance_markers()
     {
         Directory.CreateDirectory(_directory);
@@ -20,34 +41,34 @@ public sealed class ProofreadingPackageTests : IDisposable
         await File.WriteAllBytesAsync(source, [1, 2, 3]);
         var projectId = Guid.NewGuid();
         var batchId = Guid.NewGuid();
-        var output = Path.Combine(_directory, "proofreading.zip");
+        var output = Path.Combine(_directory, "proofreading");
         var request = new ProofreadingPackageRequest(
             projectId,
             "Book",
             batchId,
             output,
-            ProofreadingPackageFormat.Zip,
+            ProofreadingPackageFormat.Directory,
             [new ProofreadingPackagePage(Guid.NewGuid(), 0, "source.png", "source-hash", source, null, "下書き", "候補", 2, "Body", "ReflowVertical", [new ProofreadingReviewItem("LowConfidence", "確認", "語")])]);
 
         await new ProofreadingPackageExporter().ExportAsync(request, CancellationToken.None);
 
-        using var archive = ZipFile.OpenRead(output);
-        Assert.Contains(archive.Entries, entry => entry.FullName == "instructions.md");
-        Assert.Contains(archive.Entries, entry => entry.FullName == "manifest.json");
-        Assert.Contains(archive.Entries, entry => entry.FullName == "ocr.txt");
-        Assert.Contains(archive.Entries, entry => entry.FullName == "review-items.json");
-        Assert.Contains(archive.Entries, entry => entry.FullName == "images-original/PAGE-0001.png");
-        var ocr = await ReadEntryAsync(archive, "ocr.txt");
+        Assert.True(File.Exists(Path.Combine(output, "instructions.md")));
+        Assert.True(File.Exists(Path.Combine(output, "manifest.json")));
+        Assert.True(File.Exists(Path.Combine(output, "ocr.txt")));
+        Assert.True(File.Exists(Path.Combine(output, "review-items.json")));
+        Assert.True(File.Exists(Path.Combine(output, "images-original", "PAGE-0001.png")));
+        var ocr = await File.ReadAllTextAsync(Path.Combine(output, "ocr.txt"));
         Assert.Contains($"[[PROJECT_ID:{projectId:D}]]", ocr, StringComparison.Ordinal);
         Assert.Contains($"[[BATCH_ID:{batchId:D}]]", ocr, StringComparison.Ordinal);
         Assert.Contains("[[PAGE:0001]]", ocr, StringComparison.Ordinal);
         Assert.Contains("[[TEXT_BEGIN]]", ocr, StringComparison.Ordinal);
         Assert.Contains("[[TEXT_END]]", ocr, StringComparison.Ordinal);
         Assert.Contains("[[REPORT_BEGIN]]", ocr, StringComparison.Ordinal);
-        var instructions = await ReadEntryAsync(archive, "instructions.md");
+        var instructions = await File.ReadAllTextAsync(Path.Combine(output, "instructions.md"));
+        Assert.Equal(new ChatGptPromptTemplateProvider().GetTemplate(ChatGptTaskType.TextProofreading), instructions);
         Assert.Contains("TEXT_BEGIN", instructions, StringComparison.Ordinal);
         Assert.Contains("REPORT_BEGIN", instructions, StringComparison.Ordinal);
-        Assert.Contains("LowConfidence", await ReadEntryAsync(archive, "review-items.json"), StringComparison.Ordinal);
+        Assert.Contains("LowConfidence", await File.ReadAllTextAsync(Path.Combine(output, "review-items.json")), StringComparison.Ordinal);
     }
 
     [Theory]
@@ -61,19 +82,18 @@ public sealed class ProofreadingPackageTests : IDisposable
         Directory.CreateDirectory(_directory);
         var source = Path.Combine(_directory, $"{Guid.NewGuid():N}.png");
         await File.WriteAllBytesAsync(source, [1, 2, 3]);
-        var output = Path.Combine(_directory, $"{Guid.NewGuid():N}.zip");
+        var output = Path.Combine(_directory, Guid.NewGuid().ToString("N"));
         var page = new ProofreadingPackagePage(
             Guid.NewGuid(), 0, "source.png", "hash", source, null, rawPaddle, suggested, 0,
             "Body", "ReflowVertical", ManualText: manual, ConfirmedText: confirmed);
 
         await new ProofreadingPackageExporter().ExportAsync(
-            new ProofreadingPackageRequest(Guid.NewGuid(), "Book", Guid.NewGuid(), output, ProofreadingPackageFormat.Zip, [page]),
+            new ProofreadingPackageRequest(Guid.NewGuid(), "Book", Guid.NewGuid(), output, ProofreadingPackageFormat.Directory, [page]),
             CancellationToken.None);
 
-        using var archive = ZipFile.OpenRead(output);
-        var ocr = await ReadEntryAsync(archive, "ocr.txt");
+        var ocr = await File.ReadAllTextAsync(Path.Combine(output, "ocr.txt"));
         Assert.Contains($"[[TEXT_BEGIN]]\n{expected}\n[[TEXT_END]]", ocr.Replace("\r\n", "\n"), StringComparison.Ordinal);
-        using var manifest = JsonDocument.Parse(await ReadEntryAsync(archive, "manifest.json"));
+        using var manifest = JsonDocument.Parse(await File.ReadAllTextAsync(Path.Combine(output, "manifest.json")));
         Assert.Equal(2, manifest.RootElement.GetProperty("formatVersion").GetInt32());
         Assert.Equal(expectedSource, manifest.RootElement.GetProperty("pages")[0].GetProperty("textSource").GetString());
     }
@@ -215,16 +235,15 @@ public sealed class ProofreadingPackageTests : IDisposable
         Directory.CreateDirectory(_directory);
         var source = Path.Combine(_directory, "roundtrip.png");
         await File.WriteAllBytesAsync(source, [1, 2, 3]);
-        var output = Path.Combine(_directory, "roundtrip.zip");
+        var output = Path.Combine(_directory, "roundtrip");
         var projectId = Guid.NewGuid();
         var batchId = Guid.NewGuid();
         await new ProofreadingPackageExporter().ExportAsync(
-            new ProofreadingPackageRequest(projectId, "Book", batchId, output, ProofreadingPackageFormat.Zip,
+            new ProofreadingPackageRequest(projectId, "Book", batchId, output, ProofreadingPackageFormat.Directory,
             [new ProofreadingPackagePage(Guid.NewGuid(), 0, "roundtrip.png", "hash", source, null, "本文", null, 0,
                 "Body", "ReflowVertical")]), CancellationToken.None);
 
-        using var archive = ZipFile.OpenRead(output);
-        var document = ProofreadingImportParser.Parse(await ReadEntryAsync(archive, "ocr.txt"));
+        var document = ProofreadingImportParser.Parse(await File.ReadAllTextAsync(Path.Combine(output, "ocr.txt")));
 
         Assert.Equal(2, document.FormatVersion);
         Assert.Equal(projectId, document.ProjectId);
@@ -238,15 +257,14 @@ public sealed class ProofreadingPackageTests : IDisposable
         Directory.CreateDirectory(_directory);
         var source = Path.Combine(_directory, "source.jpg");
         await File.WriteAllBytesAsync(source, [0xFF, 0xD8, 0xFF]);
-        var output = Path.Combine(_directory, "proofreading.zip");
-        var request = new ProofreadingPackageRequest(Guid.NewGuid(), "Book", Guid.NewGuid(), output, ProofreadingPackageFormat.Zip,
+        var output = Path.Combine(_directory, "proofreading");
+        var request = new ProofreadingPackageRequest(Guid.NewGuid(), "Book", Guid.NewGuid(), output, ProofreadingPackageFormat.Directory,
             [new ProofreadingPackagePage(Guid.NewGuid(), 0, "source.jpg", "hash", source, null, "本文", null, 0, "Body", "ReflowVertical")]);
 
         await new ProofreadingPackageExporter().ExportAsync(request, CancellationToken.None);
 
-        using var archive = ZipFile.OpenRead(output);
-        Assert.Contains(archive.Entries, entry => entry.FullName == "images-original/PAGE-0001.jpg");
-        Assert.DoesNotContain(archive.Entries, entry => entry.FullName == "images-original/PAGE-0001.png");
+        Assert.True(File.Exists(Path.Combine(output, "images-original", "PAGE-0001.jpg")));
+        Assert.False(File.Exists(Path.Combine(output, "images-original", "PAGE-0001.png")));
     }
 
     [Fact]

@@ -1,27 +1,22 @@
-# TateScribe Test Plan
+# Test plan
 
-## Automated tests
+All fixtures use artificial text and artificial byte/image data.
 
-- Natural ordering: timestamp embedded in filename takes precedence, then EXIF, creation time, modification time, and natural filename comparison.
-- Geometry: normalized crop coordinates round-trip correctly; 90-degree rotation maps points correctly.
-- Reading order: columns sort right-to-left, glyphs sort top-to-bottom, column/page boundaries default to `DirectJoin`, and punctuation alone does not create paragraphs.
-- Evidence safety: illustration/caption classifications are excluded only when confirmed; user edits survive re-OCR; duplicate candidates remain review items.
-- Storage: create/save/load retains page order, source hash, crop, state, OCR evidence, and revisions.
-- Worker protocol: valid JSON Lines is parsed, cancellation terminates the request, malformed output and process exit become retryable errors.
-- DOCX: headings map to Word styles, body uses Normal, paragraph indent is paragraph formatting, ruby XML is emitted, and page markers/images/captions are absent. Screenshot boundaries must not create Word page breaks.
-- Proofreading exchange: raw Paddle coordinates survive Tesseract supplementation; packages include manifest/instructions/review list/stable images; mismatched, missing, duplicate, reordered, malformed, and extreme imports cannot silently overwrite text; confirmed text wins in DOCX output.
+- Prompts: format 2, JSON-only ruby response, body-change prohibition, no DOCX return, shared UI/package provider.
+- Ruby JSON: valid import and every identity, hash, paragraph, UTF-16, range, base-text, reading, source, confidence, overlap, duplicate, evidence-page, policy, and stale failure.
+- Model: mixed text/ruby, multiple ruby, different readings at different positions, unchanged plain text, stable paragraph IDs.
+- Database: old database migration, incompatible migration rollback, proposal/history/status persistence, no duplicate history, body-change staleness.
+- DOCX: legacy output, multiple ruby, preserved text/styles/spaces, no duplicate base text, OpenXmlValidator success.
+- Denden: inline ruby, different readings, escaping, roles, YAML, RTL, UTF-8 without BOM, LF, deterministic bytes, conditional safe `ruby.csv`, no EPUB/ZIP.
+- UI structure: scrollable sidebar, four crop inputs, task prompt selector, ruby/unresolved review, separate bulk actions, Denden metadata controls.
+- Runtime UI: inspect the main, prompt, proofreading import, ruby review, page evidence, and Denden windows at default and practical minimum sizes.
 
-## Manual acceptance
+Standard verification:
 
-Use local reflow and fixed-page screenshot samples; do not commit them. Verify 4-edge crop preview, display-profile/page-role settings, OCR evidence retention, 10-page package alignment, original/cropped image mapping, import validation, confirmed-text persistence, excluded headers/page numbers, and Word output without screenshot-boundary breaks.
+```powershell
+.\scripts\build.ps1
+.\scripts\test.ps1
+.\scripts\package.ps1 -SkipArchive
+```
 
-## Commands
-
-## Hardened workflow coverage
-
-Automated coverage verifies source priority and manifest provenance; post-confirmation Manual activation; format 2 marker validation including mandatory joins/report isolation/whitespace/round-trip; format 1 compatibility; export staleness; Manual/Confirmed history; re-OCR and cancellation state retention; bounded diff counts and partial acceptance; one-time Paddle initialization; structured OCR failures; EXIF ordering/fallback; printed-number validation; RubyCandidate status/overrides; Other page inclusion; chapter number/title handling; boundary joins and intentional blank paragraphs; StylesPart contents; and OpenXmlValidator output.
-
-Artificial byte arrays are used for EXIF images. No local book images or OCR body text are test fixtures.
-
-Manual acceptance additionally checks the fixed-size WPF layout, candidate rectangles over a real imported page, page navigation from the diff window, cancellation after at least one completed OCR page, opening an existing project database, and generated DOCX appearance in Word or a compatible renderer.
-`scripts/test.ps1` runs C# unit tests and Python protocol tests. `scripts/build.ps1` builds the solution; `scripts/package.ps1` runs tests then publishes self-contained win-x64 output.
+`scripts/test.ps1` excludes `Category=SlowZip` unless `-IncludeSlowZip` is explicitly supplied. The release ZIP is not created during normal verification.

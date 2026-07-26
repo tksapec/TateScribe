@@ -6,4 +6,5 @@ public sealed record OcrWordReviewState(
     OcrWord Word,
     string Role,
     bool IncludedInDraft,
-    bool IsManualOverride);
+    bool IsManualOverride,
+    string AutomaticRole);

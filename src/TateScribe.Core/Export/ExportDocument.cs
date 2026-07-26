@@ -1,5 +1,7 @@
 namespace TateScribe.Core.Export;
 
+using TateScribe.Core.Ruby;
+
 public enum ExportStyle { Normal, Heading1, Heading2, Heading3 }
 
 public enum DocumentElementRole
@@ -23,4 +25,14 @@ public sealed record ExportDocument(
 public interface IDocumentExporter
 {
     Task ExportAsync(ExportDocument document, string destinationPath, CancellationToken cancellationToken);
+}
+
+public interface IStructuredDocumentExporter
+{
+    Task ExportAsync(
+        StructuredDocument document,
+        string destinationPath,
+        bool pageBreakBeforeChapters,
+        string japaneseFontName,
+        CancellationToken cancellationToken);
 }

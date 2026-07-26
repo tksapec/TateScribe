@@ -32,7 +32,7 @@
         <DataGridTemplateColumn Header="取込み前" Width="220">
           <DataGridTemplateColumn.CellTemplate>
             <DataTemplate>
-              <TextBox Text="{Binding BeforeText}" IsReadOnly="True" TextWrapping="Wrap"
+              <TextBox Text="{Binding BeforeText, Mode=OneWay}" IsReadOnly="True" TextWrapping="Wrap"
                        VerticalScrollBarVisibility="Auto" Background="#FFFFF4F4" />
             </DataTemplate>
           </DataGridTemplateColumn.CellTemplate>
@@ -40,7 +40,7 @@
         <DataGridTemplateColumn Header="取込み後" Width="220">
           <DataGridTemplateColumn.CellTemplate>
             <DataTemplate>
-              <TextBox Text="{Binding AfterText}" IsReadOnly="True" TextWrapping="Wrap"
+              <TextBox Text="{Binding AfterText, Mode=OneWay}" IsReadOnly="True" TextWrapping="Wrap"
                        VerticalScrollBarVisibility="Auto" Background="#FFF2FFF2" />
             </DataTemplate>
           </DataGridTemplateColumn.CellTemplate>

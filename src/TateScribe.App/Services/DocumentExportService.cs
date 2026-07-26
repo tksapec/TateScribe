@@ -1,6 +1,8 @@
+using System.IO;
 using TateScribe.Core.Export;
 using TateScribe.Core.Proofreading;
 using TateScribe.Core.Projects;
+using TateScribe.Core.Ruby;
 using TateScribe.Infrastructure.Storage;
 
 namespace TateScribe.App.Services;
@@ -12,8 +14,78 @@ public sealed record DocumentExportPreparation(
     int UnproofreadPageCount,
     IReadOnlyList<ProjectPage> OtherPagesWithText);
 
+public sealed record StructuredDocumentPreparation(
+    StructuredDocument Document,
+    Guid SnapshotId,
+    DocumentExportPreparation LegacyPreparation);
+
 public sealed class DocumentExportService
 {
+    public async Task<StructuredDocumentPreparation> PrepareStructuredAsync(
+        string projectDirectory,
+        IReadOnlyList<ProjectPage> pages,
+        bool pageBreakBeforeChapters,
+        CancellationToken cancellationToken)
+    {
+        var legacy = await PrepareAsync(projectDirectory, pages, pageBreakBeforeChapters, cancellationToken);
+        await using var repository = await SqliteProjectRepository.CreateAsync(projectDirectory, cancellationToken);
+        var projectId = await repository.GetProjectIdAsync(cancellationToken);
+        var sourcePages = pages.Where(page => page.IsIncluded
+                && page.PageRole is not (PageRole.Illustration or PageRole.Blank))
+            .OrderBy(page => page.SortOrder).ToArray();
+        var sourceTexts = new List<ExportSourcePageText>();
+        for (var pageIndex = 0; pageIndex < sourcePages.Length; pageIndex++)
+        {
+            var page = sourcePages[pageIndex];
+            var state = await repository.LoadPageTextStateAsync(page.Id, cancellationToken);
+            var selected = state.SelectForProofreading();
+            if (string.IsNullOrWhiteSpace(selected.Text)
+                || !DocumentPageSelection.IncludeInDocx(page.PageRole, selected.Text))
+                continue;
+            var text = page.PageRole == PageRole.ChapterTitle
+                ? BookDocumentAssembler.CreateChapterPageText(selected.Text)
+                : selected.Text;
+            sourceTexts.Add(new ExportSourcePageText(
+                page.Id,
+                (pageIndex + 1).ToString("0000", System.Globalization.CultureInfo.InvariantCulture),
+                text,
+                page.BoundaryJoinType));
+        }
+        var assembled = BookDocumentAssembler.AssembleWithSourceSpans(sourceTexts);
+        if (assembled.Count != legacy.Document.Paragraphs.Count
+            || assembled.Where((item, index) =>
+                    item.Paragraph != legacy.Document.Paragraphs[index])
+                .Any())
+            throw new InvalidDataException("Structured document assembly diverged from the standard DOCX assembly.");
+
+        var localOrdinals = new Dictionary<Guid, int>();
+        var paragraphs = new List<StructuredParagraph>();
+        for (var ordinal = 0; ordinal < assembled.Count; ordinal++)
+        {
+            var item = assembled[ordinal].Paragraph;
+            var spans = assembled[ordinal].SourceSpans;
+            var source = spans.Count == 0 ? null : spans[0];
+            var localOrdinal = source is null ? ordinal : localOrdinals.GetValueOrDefault(source.PageId);
+            if (source is not null) localOrdinals[source.PageId] = localOrdinal + 1;
+            var logicalKey = source is null
+                ? $"document:{ordinal}:{item.Role}"
+                : $"{source.PageId:D}:{localOrdinal}:{item.Role}";
+            var paragraphId = await repository.FindStableParagraphIdAsync(projectId, logicalKey, cancellationToken)
+                ?? Guid.NewGuid();
+            IReadOnlyList<InlineElement> inlines = item.Ruby is null
+                ? [new TextInline(item.Text)]
+                : [new RubyInline(Guid.NewGuid(), item.Ruby.ParentText, item.Ruby.RubyText,
+                    RubySource.UserConfirmed, 1)];
+            paragraphs.Add(new StructuredParagraph(paragraphId, item.Role, inlines,
+                DocumentTextHash.Compute(item.Text), spans, logicalKey));
+        }
+        var draft = new StructuredDocument(projectId, paragraphs, string.Empty);
+        var document = draft with { DocumentTextHash = DocumentTextHash.Compute(draft) };
+        var snapshotId = await repository.SaveDocumentSnapshotAsync(document, "SelectedConfirmedText", cancellationToken);
+        var withConfirmedRuby = await repository.LoadStructuredDocumentAsync(projectId, snapshotId, cancellationToken);
+        return new StructuredDocumentPreparation(withConfirmedRuby, snapshotId, legacy);
+    }
+
     public async Task<DocumentExportPreparation> PrepareAsync(
         string projectDirectory,
         IReadOnlyList<ProjectPage> pages,

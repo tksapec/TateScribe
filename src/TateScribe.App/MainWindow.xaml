@@ -8,77 +8,119 @@
       <ColumnDefinition Width="16" />
       <ColumnDefinition Width="*" />
     </Grid.ColumnDefinitions>
-    <DockPanel Grid.Column="0">
-      <Button DockPanel.Dock="Top" Margin="0,0,0,8" Padding="12,6" Click="CreateProject">プロジェクトを作成／開く</Button>
-      <Button DockPanel.Dock="Top" Margin="0,0,0,12" Padding="12,6" Click="ImportImages">画像を追加</Button>
-      <Button x:Name="RunOcrButton" DockPanel.Dock="Top" Margin="0,0,0,8" Padding="12,6" Click="RunOcr">OCRを実行</Button>
-      <Button x:Name="RunAllOcrButton" DockPanel.Dock="Top" Margin="0,0,0,8" Padding="12,6" Click="RunAllOcr">全ページをOCR</Button>
-      <Button x:Name="CancelOcrButton" DockPanel.Dock="Top" Margin="0,0,0,12" Padding="12,6" Click="CancelOcr" IsEnabled="False">OCRを中止</Button>
-      <Button DockPanel.Dock="Top" Margin="0,0,0,8" Padding="12,6" Click="ExportProofreadingPackage">校正用パッケージを出力</Button>
-      <Button DockPanel.Dock="Top" Margin="0,0,0,12" Padding="12,6" Click="ImportProofreadText">校正済みテキストを取り込む</Button>
-      <Button DockPanel.Dock="Top" Margin="0,0,0,12" Padding="12,6" Click="ExportDocx">DOCXへ出力</Button>
-      <Button DockPanel.Dock="Top"
-              Margin="0,0,0,12"
-              Padding="12,6"
-              Click="ShowChatGptProofreadingPrompt"
-              ToolTip="ChatGPTへDOCXの最終校正を依頼するための、編集・コピー可能な指示文を表示します。">ChatGPT最終校正用の指示</Button>
-      <CheckBox x:Name="PageBreakBeforeChapters" DockPanel.Dock="Top" Margin="0,0,0,8" ToolTip="DOCX出力時の例: ページ種別を ChapterTitle にしたページを、新しいページから始めます。">章タイトルの前で改ページ</CheckBox>
-      <StackPanel DockPanel.Dock="Bottom" Orientation="Horizontal" HorizontalAlignment="Center" Margin="0,12,0,0">
-        <Button Width="76" Padding="8,6" Margin="0,0,8,0" Click="MovePageUp">上へ</Button>
-        <Button Width="76" Padding="8,6" Click="MovePageDown">下へ</Button>
-      </StackPanel>
-      <StackPanel DockPanel.Dock="Bottom" Orientation="Horizontal" HorizontalAlignment="Center" Margin="0,0,0,8">
-        <Button Width="92" Padding="8,6" Margin="0,0,8,0" Click="RotatePageLeft">左へ90度</Button>
-        <Button Width="92" Padding="8,6" Click="RotatePageRight">右へ90度</Button>
-      </StackPanel>
-      <StackPanel DockPanel.Dock="Bottom" Margin="0,0,0,8">
-        <Grid HorizontalAlignment="Center">
-          <Grid.RowDefinitions>
-            <RowDefinition Height="Auto" />
-            <RowDefinition Height="Auto" />
-          </Grid.RowDefinitions>
-          <Grid.ColumnDefinitions>
-            <ColumnDefinition Width="Auto" />
-            <ColumnDefinition Width="Auto" />
-          </Grid.ColumnDefinitions>
-          <StackPanel Grid.Row="0" Grid.Column="0" Orientation="Horizontal" Margin="0,0,12,3">
-            <TextBlock VerticalAlignment="Center" FontSize="12" Text="左除外%" />
-            <TextBox x:Name="CropLeftPercent" Width="42" Margin="3,0,0,0" />
-          </StackPanel>
-          <StackPanel Grid.Row="0" Grid.Column="1" Orientation="Horizontal" Margin="0,0,0,3">
-            <TextBlock VerticalAlignment="Center" FontSize="12" Text="右除外%" />
-            <TextBox x:Name="CropRightPercent" Width="42" Margin="3,0,0,0" />
-          </StackPanel>
-          <StackPanel Grid.Row="1" Grid.Column="0" Orientation="Horizontal" Margin="0,0,12,0">
-            <TextBlock VerticalAlignment="Center" FontSize="12" Text="上部除外%" />
-            <TextBox x:Name="CropTopPercent" Width="42" Margin="3,0,0,0" />
-          </StackPanel>
-          <StackPanel Grid.Row="1" Grid.Column="1" Orientation="Horizontal">
-            <TextBlock VerticalAlignment="Center" FontSize="12" Text="下部除外%" />
-            <TextBox x:Name="CropBottomPercent" Width="42" Margin="3,0,0,0" />
-          </StackPanel>
-        </Grid>
-        <Button Width="144" HorizontalAlignment="Center" Margin="0,6,0,0" Padding="8,4" Click="ApplyCrop">切り抜きを適用</Button>
-        <Button Width="144" HorizontalAlignment="Center" Margin="0,4,0,0" Padding="8,4" Click="ApplyCropToAll">全ページに適用</Button>
-      </StackPanel>
-      <StackPanel DockPanel.Dock="Bottom" Margin="0,0,0,8">
-        <ComboBox x:Name="DisplayProfileSelector" Margin="0,0,0,4" ToolTip="表示形式です。例: 通常の本文は ReflowVertical、印刷ページ単位を扱う場合は FixedPageVertical を選びます。" />
-        <ComboBox x:Name="PageRoleSelector" Margin="0,0,0,4" ToolTip="ページ種別です。例: 本文は Body、章見出しだけのページは ChapterTitle、挿絵は Illustration を選びます。IllustrationとBlankは除外し、Otherは本文があれば確認後に含めます。" />
-        <TextBox x:Name="PrintedPageNumberEditor" Margin="0,0,0,4" ToolTip="印刷ページ番号です。FixedPageVertical を選んだページで、例: 42 のように入力します。" />
-        <Button Padding="8,4" Click="SavePageMetadata" ToolTip="選択した表示形式・ページ種別・印刷ページ番号を、現在選んでいるページへ保存します。">ページ種別・表示形式を保存</Button>
-      </StackPanel>
-      <StackPanel DockPanel.Dock="Bottom" Margin="0,0,0,8">
-        <StackPanel Orientation="Horizontal" HorizontalAlignment="Center">
-          <TextBlock VerticalAlignment="Center" FontSize="12" Text="校正範囲 開始" />
-          <TextBox x:Name="ProofreadingStartPage" Width="34" Margin="3,0,0,0" Text="1" />
-          <TextBlock VerticalAlignment="Center" FontSize="12" Margin="6,0,0,0" Text="件数" />
-          <TextBox x:Name="ProofreadingPageCount" Width="34" Margin="3,0,0,0" Text="10" />
+    <Grid Grid.Column="0">
+      <Grid.RowDefinitions>
+        <RowDefinition Height="3*" />
+        <RowDefinition Height="2*" MinHeight="90" />
+        <RowDefinition Height="Auto" />
+      </Grid.RowDefinitions>
+      <ScrollViewer x:Name="SidebarScrollViewer"
+                    VerticalScrollBarVisibility="Auto"
+                    HorizontalScrollBarVisibility="Disabled"
+                    Padding="0,0,6,0">
+        <StackPanel>
+          <Button Margin="0,0,0,8" Padding="12,6" Click="CreateProject">プロジェクトを作成／開く</Button>
+          <Button Margin="0,0,0,12" Padding="12,6" Click="ImportImages">画像を追加</Button>
+          <Button x:Name="RunOcrButton" Margin="0,0,0,8" Padding="12,6" Click="RunOcr">OCRを実行</Button>
+          <Button x:Name="RunAllOcrButton" Margin="0,0,0,8" Padding="12,6" Click="RunAllOcr">全ページをOCR</Button>
+          <Button x:Name="CancelOcrButton" Margin="0,0,0,12" Padding="12,6" Click="CancelOcr" IsEnabled="False">OCRを中止</Button>
+
+          <GroupBox Header="ChatGPTとの受け渡し" Margin="0,0,0,10" Padding="6">
+            <StackPanel>
+              <Button Margin="0,0,0,6" Padding="8,5" Click="ShowChatGptProofreadingPrompt"
+                      ToolTip="本文校正またはルビ確認の作業を選び、ChatGPTへ渡す指示文を表示・コピーします。">ChatGPTへの指示</Button>
+              <Button Margin="0,0,0,6" Padding="8,5" Click="ExportProofreadingPackage"
+                      ToolTip="OCR本文・原画像・取込み用マーカーをまとめた本文校正用パッケージを出力します。">本文校正用パッケージを出力</Button>
+              <Button Margin="0,0,0,6" Padding="8,5" Click="ImportProofreadText"
+                      ToolTip="ChatGPTが返したTateScribe formatVersion 2の構造化テキストを検証して取り込みます。">校正済みテキストを取り込む</Button>
+              <ComboBox x:Name="RubyPolicySelector" Margin="0,2,0,6"
+                        ToolTip="ルビ候補の範囲です。標準は原画像に実在するルビだけです。" />
+              <Button Margin="0,0,0,6" Padding="8,5" Click="ExportRubyPackage"
+                      ToolTip="確定本文、原画像、OCRルビ候補、JSON Schemaをフォルダーへ出力します。本文校正前は警告します。">ルビ確認用パッケージを出力</Button>
+              <Button Padding="8,5" Click="ImportRubyJson"
+                      ToolTip="ChatGPTが返したルビJSONを厳格に検証し、候補ごとの確認画面を開きます。エラー時はDBを変更しません。">ルビJSONを取り込んで確認</Button>
+              <Button Margin="0,6,0,0" Padding="8,5" Click="ReviewSavedRuby"
+                      ToolTip="直近に保存したルビ候補を再度開き、確定・却下・読み・範囲を見直します。">保存済みルビ候補を確認</Button>
+            </StackPanel>
+          </GroupBox>
+
+          <GroupBox Header="文書出力" Margin="0,0,0,10" Padding="6">
+            <StackPanel>
+              <CheckBox x:Name="PageBreakBeforeChapters" Margin="0,0,0,6"
+                        ToolTip="例: ChapterTitleに設定した章見出しを、新しいページから開始します。通常のページ境界では改ページしません。">章タイトルの前で改ページ</CheckBox>
+              <Button Margin="0,0,0,6" Padding="8,5" Click="ExportDocx"
+                      ToolTip="確定本文と確認済みルビから、TateScribeが決定論的にDOCXを生成します。">DOCXへ出力</Button>
+              <Button Padding="8,5" Click="ExportDenden"
+                      ToolTip="book.md、ddconv.yml、CSS、READMEをZIP化せずフォルダーへ出力します。EPUBは生成しません。">でんでん用データを出力</Button>
+            </StackPanel>
+          </GroupBox>
+
+          <GroupBox Header="ページ設定" Margin="0,0,0,10" Padding="6">
+            <StackPanel>
+              <ComboBox x:Name="DisplayProfileSelector" Margin="0,0,0,4" ToolTip="通常本文は ReflowVertical、印刷ページ単位を保つ場合は FixedPageVertical を選びます。" />
+              <ComboBox x:Name="PageRoleSelector" Margin="0,0,0,4" ToolTip="本文は Body、章見出しは ChapterTitle、挿絵は Illustration を選びます。" />
+              <TextBox x:Name="PrintedPageNumberEditor" Margin="0,0,0,4" ToolTip="FixedPageVerticalで使う印刷ページ番号です。例: 42" />
+              <Button Padding="8,4" Click="SavePageMetadata">ページ種別・表示形式を保存</Button>
+            </StackPanel>
+          </GroupBox>
+
+          <GroupBox Header="校正パッケージの範囲" Margin="0,0,0,10" Padding="6">
+            <StackPanel>
+              <StackPanel Orientation="Horizontal" HorizontalAlignment="Center">
+                <TextBlock VerticalAlignment="Center" FontSize="12" Text="開始" />
+                <TextBox x:Name="ProofreadingStartPage" Width="38" Margin="4,0,0,0" Text="1" />
+                <TextBlock VerticalAlignment="Center" FontSize="12" Margin="8,0,0,0" Text="件数" />
+                <TextBox x:Name="ProofreadingPageCount" Width="38" Margin="4,0,0,0" Text="10" />
+              </StackPanel>
+              <CheckBox x:Name="IncludeCroppedImages" Margin="0,5,0,0" IsChecked="True" HorizontalAlignment="Center">切り抜き確認画像を含める</CheckBox>
+            </StackPanel>
+          </GroupBox>
+
+          <GroupBox Header="画像の除外範囲（%）" Margin="0,0,0,10" Padding="6">
+            <StackPanel>
+              <Grid>
+                <Grid.RowDefinitions><RowDefinition /><RowDefinition /></Grid.RowDefinitions>
+                <Grid.ColumnDefinitions><ColumnDefinition /><ColumnDefinition /></Grid.ColumnDefinitions>
+                <StackPanel Grid.Row="0" Grid.Column="0" Margin="0,0,6,4">
+                  <TextBlock FontSize="12" Text="左" />
+                  <TextBox x:Name="CropLeftPercent" MinWidth="64" />
+                </StackPanel>
+                <StackPanel Grid.Row="0" Grid.Column="1" Margin="6,0,0,4">
+                  <TextBlock FontSize="12" Text="右" />
+                  <TextBox x:Name="CropRightPercent" MinWidth="64" />
+                </StackPanel>
+                <StackPanel Grid.Row="1" Grid.Column="0" Margin="0,0,6,0">
+                  <TextBlock FontSize="12" Text="上部" />
+                  <TextBox x:Name="CropTopPercent" MinWidth="64" />
+                </StackPanel>
+                <StackPanel Grid.Row="1" Grid.Column="1" Margin="6,0,0,0">
+                  <TextBlock FontSize="12" Text="下部" />
+                  <TextBox x:Name="CropBottomPercent" MinWidth="64" />
+                </StackPanel>
+              </Grid>
+              <Button Margin="0,6,0,0" Padding="8,4" Click="ApplyCrop">切り抜きを適用</Button>
+              <Button Margin="0,4,0,0" Padding="8,4" Click="ApplyCropToAll">全ページに適用</Button>
+            </StackPanel>
+          </GroupBox>
+
+          <Button Margin="0,0,0,8" Padding="12,6" Click="TogglePageUsage">選択ページを使用／除外</Button>
         </StackPanel>
-        <CheckBox x:Name="IncludeCroppedImages" Margin="0,4,0,0" IsChecked="True" HorizontalAlignment="Center">切り抜き確認画像を含める</CheckBox>
+      </ScrollViewer>
+
+      <ListBox x:Name="PageList" Grid.Row="1" Margin="0,8,6,0"
+               DisplayMemberPath="DisplayLabel" SelectionChanged="PageSelectionChanged" />
+
+      <StackPanel Grid.Row="2" Margin="0,8,6,0">
+        <StackPanel Orientation="Horizontal" HorizontalAlignment="Center" Margin="0,0,0,6">
+          <Button Width="92" Padding="8,6" Margin="0,0,8,0" Click="RotatePageLeft">左へ90度</Button>
+          <Button Width="92" Padding="8,6" Click="RotatePageRight">右へ90度</Button>
+        </StackPanel>
+        <StackPanel Orientation="Horizontal" HorizontalAlignment="Center">
+          <Button Width="76" Padding="8,6" Margin="0,0,8,0" Click="MovePageUp">上へ</Button>
+          <Button Width="76" Padding="8,6" Click="MovePageDown">下へ</Button>
+        </StackPanel>
       </StackPanel>
-      <Button DockPanel.Dock="Bottom" Margin="0,0,0,8" Padding="12,6" Click="TogglePageUsage">使用／除外</Button>
-      <ListBox x:Name="PageList" DisplayMemberPath="DisplayLabel" SelectionChanged="PageSelectionChanged" />
-    </DockPanel>
+    </Grid>
     <Border Grid.Column="2" BorderBrush="Gray" BorderThickness="1" CornerRadius="4" Padding="24">
       <Grid>
         <Grid.RowDefinitions>

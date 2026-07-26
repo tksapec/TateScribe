@@ -6,6 +6,67 @@ namespace TateScribe.Tests;
 public sealed class BookDocumentAssemblerTests
 {
     [Fact]
+    public void Source_aware_assembly_tracks_multiple_paragraphs_and_direct_join_across_pages()
+    {
+        var first = Guid.NewGuid();
+        var second = Guid.NewGuid();
+
+        var result = BookDocumentAssembler.AssembleWithSourceSpans([
+            new ExportSourcePageText(first, "0001", "甲\n乙", BoundaryJoinType.DirectJoin),
+            new ExportSourcePageText(second, "0002", "丙", BoundaryJoinType.DirectJoin),
+        ]);
+
+        Assert.Collection(result,
+            paragraph =>
+            {
+                Assert.Equal("甲", paragraph.Paragraph.Text);
+                var span = Assert.Single(paragraph.SourceSpans);
+                Assert.Equal(first, span.PageId);
+                Assert.Equal(1, span.Length);
+            },
+            paragraph =>
+            {
+                Assert.Equal("乙丙", paragraph.Paragraph.Text);
+                Assert.Collection(paragraph.SourceSpans,
+                    span =>
+                    {
+                        Assert.Equal(first, span.PageId);
+                        Assert.Equal(0, span.Start);
+                        Assert.Equal(1, span.Length);
+                    },
+                    span =>
+                    {
+                        Assert.Equal(second, span.PageId);
+                        Assert.Equal(1, span.Start);
+                        Assert.Equal(1, span.Length);
+                    });
+            });
+    }
+
+    [Fact]
+    public void Source_aware_assembly_preserves_chapter_and_boundary_provenance()
+    {
+        var first = Guid.NewGuid();
+        var second = Guid.NewGuid();
+        var chapterText = BookDocumentAssembler.CreateChapterPageText("第一話\n章題\n本文");
+
+        var result = BookDocumentAssembler.AssembleWithSourceSpans([
+            new ExportSourcePageText(first, "0001", chapterText, BoundaryJoinType.SceneBreak),
+            new ExportSourcePageText(second, "0002", "次頁", BoundaryJoinType.DirectJoin),
+        ]);
+
+        Assert.Equal(
+            BookDocumentAssembler.Assemble([
+                new ExportPageText(chapterText, BoundaryJoinType.SceneBreak),
+                new ExportPageText("次頁"),
+            ]).Paragraphs,
+            result.Select(item => item.Paragraph));
+        Assert.All(result.Take(4), paragraph =>
+            Assert.Equal(first, Assert.Single(paragraph.SourceSpans).PageId));
+        Assert.Equal(second, Assert.Single(result[^1].SourceSpans).PageId);
+    }
+
+    [Fact]
     public void Assemble_joins_page_text_without_screenshot_boundary_paragraphs()
     {
         var document = BookDocumentAssembler.Assemble(["前ページ", "次ページ"]);

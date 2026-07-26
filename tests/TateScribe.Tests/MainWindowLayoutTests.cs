@@ -3,18 +3,20 @@ namespace TateScribe.Tests;
 public sealed class MainWindowLayoutTests
 {
     [Fact]
-    public void Crop_controls_use_a_two_row_grid_with_all_four_named_inputs()
+    public void Sidebar_is_scrollable_and_crop_controls_keep_all_four_labeled_inputs_visible()
     {
         var root = FindRepositoryRoot();
         var xaml = File.ReadAllText(Path.Combine(root, "src", "TateScribe.App", "MainWindow.xaml"));
 
-        Assert.Contains("<Grid HorizontalAlignment=\"Center\">", xaml, StringComparison.Ordinal);
-        Assert.Contains("<Grid.RowDefinitions>", xaml, StringComparison.Ordinal);
+        Assert.Contains("x:Name=\"SidebarScrollViewer\"", xaml, StringComparison.Ordinal);
+        Assert.Contains("VerticalScrollBarVisibility=\"Auto\"", xaml, StringComparison.Ordinal);
+        Assert.Contains("Header=\"画像の除外範囲（%）\"", xaml, StringComparison.Ordinal);
         Assert.Contains("x:Name=\"CropLeftPercent\"", xaml, StringComparison.Ordinal);
         Assert.Contains("x:Name=\"CropTopPercent\"", xaml, StringComparison.Ordinal);
         Assert.Contains("x:Name=\"CropBottomPercent\"", xaml, StringComparison.Ordinal);
         Assert.Contains("x:Name=\"CropRightPercent\"", xaml, StringComparison.Ordinal);
         Assert.Contains("Grid.Row=\"1\"", xaml, StringComparison.Ordinal);
+        Assert.Contains("MinWidth=\"64\"", xaml, StringComparison.Ordinal);
     }
 
     [Fact]
@@ -31,7 +33,7 @@ public sealed class MainWindowLayoutTests
     }
 
     [Fact]
-    public void Main_window_exposes_an_editable_copyable_final_proofreading_prompt()
+    public void Main_window_exposes_task_specific_editable_copyable_chatgpt_prompts()
     {
         var root = FindRepositoryRoot();
         var mainXaml = File.ReadAllText(Path.Combine(root, "src", "TateScribe.App", "MainWindow.xaml"));
@@ -41,9 +43,34 @@ public sealed class MainWindowLayoutTests
         Assert.True(File.Exists(promptPath), $"Prompt window XAML was not found: {promptPath}");
         var promptXaml = File.ReadAllText(promptPath);
         Assert.Contains("x:Name=\"PromptEditor\"", promptXaml, StringComparison.Ordinal);
+        Assert.Contains("x:Name=\"TaskTypeSelector\"", promptXaml, StringComparison.Ordinal);
+        Assert.Contains("RubyAnnotation", promptXaml, StringComparison.Ordinal);
+        Assert.Contains("Click=\"ResetPrompt\"", promptXaml, StringComparison.Ordinal);
         Assert.Contains("x:Name=\"CopyStatus\"", promptXaml, StringComparison.Ordinal);
         Assert.Contains("Click=\"CopyPrompt\"", promptXaml, StringComparison.Ordinal);
         Assert.Contains("Click=\"CloseWindow\"", promptXaml, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Main_window_exposes_ruby_package_review_and_denden_workflows()
+    {
+        var root = FindRepositoryRoot();
+        var main = File.ReadAllText(Path.Combine(root, "src", "TateScribe.App", "MainWindow.xaml"));
+        var review = File.ReadAllText(Path.Combine(root, "src", "TateScribe.App", "RubyReviewWindow.xaml"));
+        var denden = File.ReadAllText(Path.Combine(root, "src", "TateScribe.App", "DendenExportWindow.xaml"));
+
+        Assert.Contains("x:Name=\"RubyPolicySelector\"", main, StringComparison.Ordinal);
+        Assert.Contains("Click=\"ExportRubyPackage\"", main, StringComparison.Ordinal);
+        Assert.Contains("Click=\"ImportRubyJson\"", main, StringComparison.Ordinal);
+        Assert.Contains("Click=\"ReviewSavedRuby\"", main, StringComparison.Ordinal);
+        Assert.Contains("Click=\"ExportDenden\"", main, StringComparison.Ordinal);
+        Assert.Contains("x:Name=\"AnnotationGrid\"", review, StringComparison.Ordinal);
+        Assert.Contains("IsReadOnly=\"True\"", review, StringComparison.Ordinal);
+        Assert.Contains("x:Name=\"UnresolvedGrid\"", review, StringComparison.Ordinal);
+        Assert.Contains("画像根拠だけ一括確定", review, StringComparison.Ordinal);
+        Assert.Contains("本文根拠だけ一括確定", review, StringComparison.Ordinal);
+        Assert.Contains("x:Name=\"DirectionSelector\"", denden, StringComparison.Ordinal);
+        Assert.Contains("x:Name=\"TocDepthEditor\"", denden, StringComparison.Ordinal);
     }
 
     [Fact]
@@ -55,8 +82,8 @@ public sealed class MainWindowLayoutTests
         Assert.Contains("x:Name=\"SelectAllButton\"", xaml, StringComparison.Ordinal);
         Assert.Contains("x:Name=\"ClearAllButton\"", xaml, StringComparison.Ordinal);
         Assert.Contains("x:Name=\"WarningsOnly\"", xaml, StringComparison.Ordinal);
-        Assert.Contains("{Binding BeforeText}", xaml, StringComparison.Ordinal);
-        Assert.Contains("{Binding AfterText}", xaml, StringComparison.Ordinal);
+        Assert.Contains("{Binding BeforeText, Mode=OneWay}", xaml, StringComparison.Ordinal);
+        Assert.Contains("{Binding AfterText, Mode=OneWay}", xaml, StringComparison.Ordinal);
         Assert.Contains("{Binding DiffSummary}", xaml, StringComparison.Ordinal);
         Assert.Contains("{Binding InlineSpans}", xaml, StringComparison.Ordinal);
         Assert.Contains("{Binding Background}", xaml, StringComparison.Ordinal);
@@ -84,7 +111,8 @@ public sealed class MainWindowLayoutTests
         foreach (var service in new[]
                  {
                      "OcrOrchestrationService", "ProofreadingPackageService",
-                     "ProofreadingImportService", "DocumentExportService", "PageValidationService"
+                     "ProofreadingImportService", "DocumentExportService", "PageValidationService",
+                     "RubyWorkflowService", "DendenExportService"
                  })
             Assert.Contains(service, source, StringComparison.Ordinal);
     }

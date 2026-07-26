@@ -5,12 +5,343 @@ using TateScribe.Infrastructure.Storage;
 using Microsoft.Data.Sqlite;
 using TateScribe.Core.Layout;
 using TateScribe.Core.Proofreading;
+using TateScribe.Core.Export;
+using TateScribe.Core.Ruby;
 
 namespace TateScribe.Tests;
 
 public sealed class ProjectRepositoryTests : IDisposable
 {
     private readonly string _directory = Path.Combine(Path.GetTempPath(), "TateScribeTests", Guid.NewGuid().ToString("N"));
+
+    [Fact]
+    public async Task Incompatible_schema_7_migration_rolls_back_and_keeps_version_6()
+    {
+        Directory.CreateDirectory(_directory);
+        var databasePath = Path.Combine(_directory, "project.db");
+        await using (var connection = new SqliteConnection($"Data Source={databasePath};Pooling=False"))
+        {
+            await connection.OpenAsync();
+            var command = connection.CreateCommand();
+            command.CommandText = """
+                CREATE TABLE schema_version (version INTEGER NOT NULL);
+                INSERT INTO schema_version (version) VALUES (6);
+                CREATE TABLE document_snapshots (id TEXT PRIMARY KEY NOT NULL);
+                """;
+            await command.ExecuteNonQueryAsync();
+        }
+
+        await Assert.ThrowsAsync<SqliteException>(() =>
+            SqliteProjectRepository.CreateAsync(_directory, CancellationToken.None));
+
+        await using var check = new SqliteConnection($"Data Source={databasePath};Pooling=False");
+        await check.OpenAsync();
+        var version = check.CreateCommand();
+        version.CommandText = "SELECT version FROM schema_version;";
+        Assert.Equal(6L, await version.ExecuteScalarAsync());
+    }
+
+    [Fact]
+    public async Task Schema_8_keeps_stable_paragraph_ids_and_marks_confirmed_ruby_stale_after_body_edit()
+    {
+        Directory.CreateDirectory(_directory);
+        await using var repository = await SqliteProjectRepository.CreateAsync(_directory, CancellationToken.None);
+        var page = new ProjectPage(Guid.NewGuid(), "one.png", Path.Combine(_directory, "one.png"), "hash", 0, true, 0);
+        await File.WriteAllBytesAsync(page.SourcePath, [1]);
+        await repository.SavePagesAsync([page], CancellationToken.None);
+        var projectId = await repository.GetProjectIdAsync(CancellationToken.None);
+        const string logicalKey = "page-0001:0";
+        var paragraphId = Guid.NewGuid();
+        var paragraph = new StructuredParagraph(paragraphId, DocumentElementRole.BodyParagraph,
+            [new TextInline("八角")], DocumentTextHash.Compute("八角"),
+            [new SourceSpan(page.Id, "0001", 0, 2)], logicalKey);
+        var draft = new StructuredDocument(projectId, [paragraph], string.Empty);
+        var document = draft with { DocumentTextHash = DocumentTextHash.Compute(draft) };
+        var snapshotId = await repository.SaveDocumentSnapshotAsync(document, "Confirmed", CancellationToken.None);
+        var batchId = Guid.NewGuid();
+        await repository.RecordRubyBatchAsync(batchId, projectId, snapshotId, RubyPolicy.PreserveOriginalOnly,
+            [new RubyPackagePage(page.Id, "0001", page.SourcePath, null)], [], CancellationToken.None);
+        var annotation = new RubyAnnotationProposal(paragraphId.ToString("D"), 0, 2, "八角", "やすみ",
+            RubySource.ImageConfirmed, 1, ["0001"], "画像", Guid.NewGuid(), RubyAnnotationStatus.Confirmed);
+        var unresolved = new RubyUnresolvedItem(
+            paragraphId.ToString("D"), 0, 2, "八角", ["0001"], "読みを断定できない");
+        await repository.SaveRubyImportAsync(snapshotId, RubyPolicy.PreserveOriginalOnly,
+            new RubyImportDocument(
+                1, projectId, batchId, document.DocumentTextHash, [annotation], [unresolved]),
+            CancellationToken.None);
+
+        var loadedUnresolved = Assert.Single(await repository.LoadRubyUnresolvedItemsAsync(
+            batchId, CancellationToken.None));
+        Assert.Equal(unresolved.ParagraphId, loadedUnresolved.ParagraphId);
+        Assert.Equal(unresolved.Start, loadedUnresolved.Start);
+        Assert.Equal(unresolved.Length, loadedUnresolved.Length);
+        Assert.Equal(unresolved.BaseText, loadedUnresolved.BaseText);
+        Assert.Equal(unresolved.EvidencePageMarkers, loadedUnresolved.EvidencePageMarkers);
+        Assert.Equal(unresolved.Reason, loadedUnresolved.Reason);
+
+        await repository.SaveManualTextAsync(page.Id, "八角を修正", CancellationToken.None);
+
+        Assert.Equal(8, await repository.GetSchemaVersionAsync(CancellationToken.None));
+        var staleAnnotation = Assert.Single(await repository.LoadRubyAnnotationsAsync(batchId, CancellationToken.None));
+        Assert.Equal(RubyAnnotationStatus.Stale, staleAnnotation.Status);
+        Assert.Equal(1, await repository.GetRubyAnnotationHistoryCountAsync(
+            staleAnnotation.AnnotationId, CancellationToken.None));
+        await repository.UpdateRubyAnnotationsAsync([staleAnnotation], CancellationToken.None);
+        Assert.Equal(1, await repository.GetRubyAnnotationHistoryCountAsync(
+            staleAnnotation.AnnotationId, CancellationToken.None));
+        Assert.True((await repository.LoadRubyBatchAsync(batchId, CancellationToken.None)).ConfirmedTextIsStale);
+        Assert.Equal(paragraphId,
+            await repository.FindStableParagraphIdAsync(projectId, logicalKey, CancellationToken.None));
+    }
+
+    [Fact]
+    public async Task Page_structure_changes_stale_old_ruby_batches_and_create_a_distinct_snapshot_hash()
+    {
+        Directory.CreateDirectory(_directory);
+        await using var repository = await SqliteProjectRepository.CreateAsync(_directory, CancellationToken.None);
+        var page = new ProjectPage(
+            Guid.NewGuid(), "one.png", Path.Combine(_directory, "one.png"), "hash", 0, true, 0);
+        await File.WriteAllBytesAsync(page.SourcePath, [1]);
+        await repository.SavePagesAsync([page], CancellationToken.None);
+        var projectId = await repository.GetProjectIdAsync(CancellationToken.None);
+        var paragraphId = Guid.NewGuid();
+        var body = new StructuredParagraph(
+            paragraphId,
+            DocumentElementRole.BodyParagraph,
+            [new TextInline("同じ本文")],
+            DocumentTextHash.Compute("同じ本文"),
+            [new SourceSpan(page.Id, "0001", 0, 4)],
+            $"{page.Id:D}:0:{DocumentElementRole.BodyParagraph}");
+        var bodyDraft = new StructuredDocument(projectId, [body], string.Empty);
+        var bodyDocument = bodyDraft with { DocumentTextHash = DocumentTextHash.Compute(bodyDraft) };
+        var bodySnapshot = await repository.SaveDocumentSnapshotAsync(
+            bodyDocument, "Confirmed", CancellationToken.None);
+        var batchId = Guid.NewGuid();
+        await repository.RecordRubyBatchAsync(
+            batchId,
+            projectId,
+            bodySnapshot,
+            RubyPolicy.PreserveOriginalOnly,
+            [new RubyPackagePage(page.Id, "0001", page.SourcePath, null)],
+            [],
+            CancellationToken.None);
+
+        await repository.SavePagesAsync(
+            [page with { PageRole = PageRole.ChapterTitle }],
+            CancellationToken.None);
+
+        Assert.True((await repository.LoadRubyBatchAsync(
+            batchId, CancellationToken.None)).ConfirmedTextIsStale);
+        var heading = body with
+        {
+            Role = DocumentElementRole.ChapterTitle,
+            LogicalKey = $"{page.Id:D}:0:{DocumentElementRole.ChapterTitle}",
+        };
+        var headingDraft = new StructuredDocument(projectId, [heading], string.Empty);
+        var headingDocument = headingDraft with
+        {
+            DocumentTextHash = DocumentTextHash.Compute(headingDraft),
+        };
+        var headingSnapshot = await repository.SaveDocumentSnapshotAsync(
+            headingDocument, "Confirmed", CancellationToken.None);
+        Assert.NotEqual(bodyDocument.DocumentTextHash, headingDocument.DocumentTextHash);
+        Assert.NotEqual(bodySnapshot, headingSnapshot);
+    }
+
+    [Fact]
+    public async Task Ruby_batch_page_markers_keep_the_original_page_ids_after_reordering()
+    {
+        Directory.CreateDirectory(_directory);
+        await using var repository = await SqliteProjectRepository.CreateAsync(
+            _directory, CancellationToken.None);
+        var first = new ProjectPage(
+            Guid.NewGuid(), "one.png", Path.Combine(_directory, "one.png"), "one", 0, true, 0);
+        var second = new ProjectPage(
+            Guid.NewGuid(), "two.png", Path.Combine(_directory, "two.png"), "two", 1, true, 0);
+        await File.WriteAllBytesAsync(first.SourcePath, [1]);
+        await File.WriteAllBytesAsync(second.SourcePath, [2]);
+        await repository.SavePagesAsync([first, second], CancellationToken.None);
+        var projectId = await repository.GetProjectIdAsync(CancellationToken.None);
+        var paragraph = new StructuredParagraph(
+            Guid.NewGuid(),
+            DocumentElementRole.BodyParagraph,
+            [new TextInline("本文")],
+            DocumentTextHash.Compute("本文"),
+            [new SourceSpan(first.Id, "0001", 0, 1), new SourceSpan(second.Id, "0002", 1, 1)],
+            $"{first.Id:D}:0:{DocumentElementRole.BodyParagraph}");
+        var draft = new StructuredDocument(projectId, [paragraph], string.Empty);
+        var document = draft with { DocumentTextHash = DocumentTextHash.Compute(draft) };
+        var snapshotId = await repository.SaveDocumentSnapshotAsync(
+            document, "Confirmed", CancellationToken.None);
+        var batchId = Guid.NewGuid();
+        await repository.RecordRubyBatchAsync(
+            batchId,
+            projectId,
+            snapshotId,
+            RubyPolicy.PreserveOriginalOnly,
+            [
+                new RubyPackagePage(first.Id, "0001", first.SourcePath, null),
+                new RubyPackagePage(second.Id, "0002", second.SourcePath, null),
+            ],
+            [],
+            CancellationToken.None);
+
+        await repository.SavePagesAsync(
+            [first with { SortOrder = 1 }, second with { SortOrder = 0 }],
+            CancellationToken.None);
+
+        var batch = await repository.LoadRubyBatchAsync(batchId, CancellationToken.None);
+        Assert.Equal(first.Id, batch.PageIdsByMarker["0001"]);
+        Assert.Equal(second.Id, batch.PageIdsByMarker["0002"]);
+    }
+
+    [Fact]
+    public async Task Confirming_an_overlapping_ruby_stales_the_older_batch_annotation()
+    {
+        Directory.CreateDirectory(_directory);
+        await using var repository = await SqliteProjectRepository.CreateAsync(_directory, CancellationToken.None);
+        var page = new ProjectPage(
+            Guid.NewGuid(), "one.png", Path.Combine(_directory, "one.png"), "hash", 0, true, 0);
+        await File.WriteAllBytesAsync(page.SourcePath, [1]);
+        await repository.SavePagesAsync([page], CancellationToken.None);
+        var projectId = await repository.GetProjectIdAsync(CancellationToken.None);
+        var paragraph = new StructuredParagraph(
+            Guid.NewGuid(),
+            DocumentElementRole.BodyParagraph,
+            [new TextInline("東京都")],
+            DocumentTextHash.Compute("東京都"),
+            [new SourceSpan(page.Id, "0001", 0, 3)],
+            $"{page.Id:D}:0:{DocumentElementRole.BodyParagraph}");
+        var draft = new StructuredDocument(projectId, [paragraph], string.Empty);
+        var document = draft with { DocumentTextHash = DocumentTextHash.Compute(draft) };
+        var snapshotId = await repository.SaveDocumentSnapshotAsync(
+            document, "Confirmed", CancellationToken.None);
+        var firstBatch = Guid.NewGuid();
+        var secondBatch = Guid.NewGuid();
+        var packagePages = new[] { new RubyPackagePage(page.Id, "0001", page.SourcePath, null) };
+        await repository.RecordRubyBatchAsync(
+            firstBatch, projectId, snapshotId, RubyPolicy.OriginalAndTextConfirmed,
+            packagePages, [], CancellationToken.None);
+        await repository.RecordRubyBatchAsync(
+            secondBatch, projectId, snapshotId, RubyPolicy.OriginalAndTextConfirmed,
+            packagePages, [], CancellationToken.None);
+        var first = new RubyAnnotationProposal(
+            paragraph.ParagraphId.ToString("D"), 0, 2, "東京", "とうきょう",
+            RubySource.TextConfirmed, 1, ["0001"], "本文", Guid.NewGuid(),
+            RubyAnnotationStatus.Confirmed);
+        var second = new RubyAnnotationProposal(
+            paragraph.ParagraphId.ToString("D"), 1, 2, "京都", "きょうと",
+            RubySource.TextConfirmed, 1, ["0001"], "本文", Guid.NewGuid(),
+            RubyAnnotationStatus.Confirmed);
+        await repository.SaveRubyImportAsync(
+            snapshotId,
+            RubyPolicy.OriginalAndTextConfirmed,
+            new RubyImportDocument(
+                1, projectId, firstBatch, document.DocumentTextHash, [first], []),
+            CancellationToken.None);
+        await repository.SaveRubyImportAsync(
+            snapshotId,
+            RubyPolicy.OriginalAndTextConfirmed,
+            new RubyImportDocument(
+                1, projectId, secondBatch, document.DocumentTextHash, [second], []),
+            CancellationToken.None);
+        Assert.Equal(
+            RubyAnnotationStatus.Stale,
+            Assert.Single(await repository.LoadRubyAnnotationsAsync(
+                firstBatch, CancellationToken.None)).Status);
+        Assert.Equal(
+            RubyAnnotationStatus.Confirmed,
+            Assert.Single(await repository.LoadRubyAnnotationsAsync(
+                secondBatch, CancellationToken.None)).Status);
+        var composed = await repository.LoadStructuredDocumentAsync(
+            projectId, snapshotId, CancellationToken.None);
+        Assert.Single(Assert.Single(composed.Paragraphs).Inlines.OfType<RubyInline>());
+    }
+
+    [Theory]
+    [InlineData(RubyAnnotationStatus.Proposed, 1)]
+    [InlineData(RubyAnnotationStatus.Confirmed, 0)]
+    public async Task Reimporting_the_same_ruby_reuses_the_persisted_id_and_keeps_it_confirmed(
+        RubyAnnotationStatus initialStatus,
+        int expectedHistoryCount)
+    {
+        Directory.CreateDirectory(_directory);
+        await using var repository = await SqliteProjectRepository.CreateAsync(
+            _directory, CancellationToken.None);
+        var page = new ProjectPage(
+            Guid.NewGuid(), "one.png", Path.Combine(_directory, "one.png"), "hash", 0, true, 0);
+        await File.WriteAllBytesAsync(page.SourcePath, [1]);
+        await repository.SavePagesAsync([page], CancellationToken.None);
+        var projectId = await repository.GetProjectIdAsync(CancellationToken.None);
+        var paragraph = new StructuredParagraph(
+            Guid.NewGuid(),
+            DocumentElementRole.BodyParagraph,
+            [new TextInline("東京")],
+            DocumentTextHash.Compute("東京"),
+            [new SourceSpan(page.Id, "0001", 0, 2)],
+            $"{page.Id:D}:0:{DocumentElementRole.BodyParagraph}");
+        var draft = new StructuredDocument(projectId, [paragraph], string.Empty);
+        var document = draft with { DocumentTextHash = DocumentTextHash.Compute(draft) };
+        var snapshotId = await repository.SaveDocumentSnapshotAsync(
+            document, "Confirmed", CancellationToken.None);
+        var batchId = Guid.NewGuid();
+        await repository.RecordRubyBatchAsync(
+            batchId,
+            projectId,
+            snapshotId,
+            RubyPolicy.OriginalAndTextConfirmed,
+            [new RubyPackagePage(page.Id, "0001", page.SourcePath, null)],
+            [],
+            CancellationToken.None);
+        RubyAnnotationProposal Annotation(Guid id, RubyAnnotationStatus status) => new(
+            paragraph.ParagraphId.ToString("D"),
+            0,
+            2,
+            "東京",
+            "とうきょう",
+            RubySource.TextConfirmed,
+            1,
+            ["0001"],
+            "本文",
+            id,
+            status);
+        var firstId = Guid.NewGuid();
+        await repository.SaveRubyImportAsync(
+            snapshotId,
+            RubyPolicy.OriginalAndTextConfirmed,
+            new RubyImportDocument(
+                1,
+                projectId,
+                batchId,
+                document.DocumentTextHash,
+                [Annotation(firstId, initialStatus)],
+                []),
+            CancellationToken.None);
+
+        await repository.SaveRubyImportAsync(
+            snapshotId,
+            RubyPolicy.OriginalAndTextConfirmed,
+            new RubyImportDocument(
+                1,
+                projectId,
+                batchId,
+                document.DocumentTextHash,
+                [Annotation(Guid.NewGuid(), RubyAnnotationStatus.Confirmed)],
+                []),
+            CancellationToken.None);
+
+        var persisted = Assert.Single(await repository.LoadRubyAnnotationsAsync(
+            batchId, CancellationToken.None));
+        Assert.Equal(firstId, persisted.AnnotationId);
+        Assert.Equal(RubyAnnotationStatus.Confirmed, persisted.Status);
+        Assert.Equal(
+            expectedHistoryCount,
+            await repository.GetRubyAnnotationHistoryCountAsync(
+                firstId, CancellationToken.None));
+        var composed = await repository.LoadStructuredDocumentAsync(
+            projectId, snapshotId, CancellationToken.None);
+        Assert.Single(Assert.Single(composed.Paragraphs).Inlines.OfType<RubyInline>());
+    }
 
     [Fact]
     public async Task Save_and_load_preserves_manual_page_order_and_source_hash()
@@ -200,6 +531,114 @@ public sealed class ProjectRepositoryTests : IDisposable
     }
 
     [Fact]
+    public async Task Restoring_a_different_selected_text_marks_an_existing_ruby_batch_stale()
+    {
+        Directory.CreateDirectory(_directory);
+        await using var repository = await SqliteProjectRepository.CreateAsync(
+            _directory, CancellationToken.None);
+        var page = new ProjectPage(
+            Guid.NewGuid(), "page.png", "C:\\page.png", "hash", 0, true, 0);
+        await repository.SavePagesAsync([page], CancellationToken.None);
+        await repository.SaveManualTextAsync(page.Id, "初版", CancellationToken.None);
+        var first = Assert.Single(
+            await repository.LoadPageTextVersionsAsync(page.Id, CancellationToken.None),
+            version => version.Kind == "Manual");
+        await repository.SaveManualTextAsync(page.Id, "改訂版", CancellationToken.None);
+        var projectId = await repository.GetProjectIdAsync(CancellationToken.None);
+        var paragraph = new StructuredParagraph(
+            Guid.NewGuid(),
+            DocumentElementRole.BodyParagraph,
+            [new TextInline("改訂版")],
+            DocumentTextHash.Compute("改訂版"),
+            [new SourceSpan(page.Id, "0001", 0, 3)],
+            $"{page.Id:D}:0:{DocumentElementRole.BodyParagraph}");
+        var draft = new StructuredDocument(projectId, [paragraph], string.Empty);
+        var document = draft with { DocumentTextHash = DocumentTextHash.Compute(draft) };
+        var snapshotId = await repository.SaveDocumentSnapshotAsync(
+            document, "Manual", CancellationToken.None);
+        var batchId = Guid.NewGuid();
+        await repository.RecordRubyBatchAsync(
+            batchId,
+            projectId,
+            snapshotId,
+            RubyPolicy.PreserveOriginalOnly,
+            [new RubyPackagePage(page.Id, "0001", page.SourcePath, null)],
+            [],
+            CancellationToken.None);
+
+        await repository.RestoreTextVersionAsync(first, CancellationToken.None);
+
+        Assert.True((await repository.LoadRubyBatchAsync(
+            batchId, CancellationToken.None)).ConfirmedTextIsStale);
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task Ocr_word_review_stales_ruby_only_when_it_changes_the_selected_text(
+        bool protectWithManualText)
+    {
+        Directory.CreateDirectory(_directory);
+        await using var repository = await SqliteProjectRepository.CreateAsync(
+            _directory, CancellationToken.None);
+        var page = new ProjectPage(
+            Guid.NewGuid(), "page.png", "C:\\page.png", "hash", 0, true, 0);
+        await repository.SavePagesAsync([page], CancellationToken.None);
+        var words = new[]
+        {
+            new OcrWord("本文", .95, 0, 0, 10, 10),
+            new OcrWord("ルビ", .85, 11, 1, 14, 9),
+        };
+        await repository.SaveOcrAnalysisAsync(
+            page.Id,
+            new OcrPageResult("request", "paddle", "model", words),
+            string.Empty,
+            new OcrMergeProposal("本文", [], []),
+            CancellationToken.None);
+        if (protectWithManualText)
+            await repository.SaveManualTextAsync(page.Id, "保護本文", CancellationToken.None);
+        var selected = (await repository.LoadPageTextStateAsync(
+            page.Id, CancellationToken.None)).SelectForProofreading().Text;
+        var projectId = await repository.GetProjectIdAsync(CancellationToken.None);
+        var paragraph = new StructuredParagraph(
+            Guid.NewGuid(),
+            DocumentElementRole.BodyParagraph,
+            [new TextInline(selected)],
+            DocumentTextHash.Compute(selected),
+            [new SourceSpan(page.Id, "0001", 0, selected.Length)],
+            $"{page.Id:D}:0:{DocumentElementRole.BodyParagraph}");
+        var draft = new StructuredDocument(projectId, [paragraph], string.Empty);
+        var document = draft with { DocumentTextHash = DocumentTextHash.Compute(draft) };
+        var snapshotId = await repository.SaveDocumentSnapshotAsync(
+            document, "Selected", CancellationToken.None);
+        var batchId = Guid.NewGuid();
+        await repository.RecordRubyBatchAsync(
+            batchId,
+            projectId,
+            snapshotId,
+            RubyPolicy.PreserveOriginalOnly,
+            [new RubyPackagePage(page.Id, "0001", page.SourcePath, null)],
+            [],
+            CancellationToken.None);
+        var candidate = Assert.Single(
+            await repository.LoadLatestOcrWordStatesAsync(page.Id, CancellationToken.None),
+            word => word.AutomaticRole == "RubyCandidate");
+
+        await repository.UpdateOcrWordReviewAsync(
+            page.Id,
+            candidate.RunId,
+            candidate.Ordinal,
+            "Body",
+            true,
+            CancellationToken.None);
+
+        Assert.Equal(
+            !protectWithManualText,
+            (await repository.LoadRubyBatchAsync(
+                batchId, CancellationToken.None)).ConfirmedTextIsStale);
+    }
+
+    [Fact]
     public async Task Reocr_preserves_confirmed_text_and_marks_its_proofreading_state_stale()
     {
         Directory.CreateDirectory(_directory);
@@ -249,10 +688,76 @@ public sealed class ProjectRepositoryTests : IDisposable
         await repository.ReplaceOcrWordsAsync(page.Id, "paddle", "model", [new OcrWord("字", .9, 1, 2, 3, 4)], CancellationToken.None);
         await repository.SaveManualTextAsync(page.Id, "手動", CancellationToken.None);
 
-        Assert.Equal(6, await repository.GetSchemaVersionAsync(CancellationToken.None));
+        Assert.Equal(8, await repository.GetSchemaVersionAsync(CancellationToken.None));
         var state = await repository.LoadPageTextStateAsync(page.Id, CancellationToken.None);
         Assert.Equal("手動", state.ManualText);
         Assert.Equal((1d, 2d, 3d, 4d), (state.MachineWords[0].Left, state.MachineWords[0].Top, state.MachineWords[0].Right, state.MachineWords[0].Bottom));
+    }
+
+    [Fact]
+    public async Task Schema_8_migration_recomputes_the_automatic_role_for_a_returned_body_word()
+    {
+        Directory.CreateDirectory(_directory);
+        var page = new ProjectPage(
+            Guid.NewGuid(), "page.png", "C:\\page.png", "hash", 0, true, 0);
+        await using (var repository = await SqliteProjectRepository.CreateAsync(
+            _directory, CancellationToken.None))
+        {
+            await repository.SavePagesAsync([page], CancellationToken.None);
+            var words = new[]
+            {
+                new OcrWord("本文", .95, 0, 0, 10, 10),
+                new OcrWord("ルビ", .85, 11, 1, 14, 9),
+            };
+            await repository.SaveOcrAnalysisAsync(
+                page.Id,
+                new OcrPageResult("request", "paddle", "model", words),
+                string.Empty,
+                new OcrMergeProposal("本文", [], []),
+                CancellationToken.None);
+            var initialReviewed = await repository.LoadLatestOcrWordStatesAsync(
+                page.Id, CancellationToken.None);
+            var candidate = Assert.Single(
+                initialReviewed,
+                word => word.AutomaticRole == "RubyCandidate");
+            var body = Assert.Single(initialReviewed, word => word.AutomaticRole == "Body");
+            await repository.UpdateOcrWordReviewAsync(
+                page.Id,
+                candidate.RunId,
+                candidate.Ordinal,
+                "Body",
+                true,
+                CancellationToken.None);
+            await repository.UpdateOcrWordReviewAsync(
+                page.Id,
+                body.RunId,
+                body.Ordinal,
+                "Body",
+                false,
+                CancellationToken.None);
+        }
+
+        await using (var connection = new SqliteConnection(
+            $"Data Source={Path.Combine(_directory, "project.db")};Pooling=False"))
+        {
+            await connection.OpenAsync();
+            var downgrade = connection.CreateCommand();
+            downgrade.CommandText = """
+                UPDATE schema_version SET version = 7;
+                UPDATE ocr_run_words SET automatic_role = 'Body';
+                """;
+            await downgrade.ExecuteNonQueryAsync();
+        }
+
+        await using var migrated = await SqliteProjectRepository.CreateAsync(
+            _directory, CancellationToken.None);
+        var reviewed = await migrated.LoadLatestOcrWordStatesAsync(
+            page.Id, CancellationToken.None);
+        var returned = Assert.Single(
+            RubyOcrCandidateSelector.Select("0001", "本文", reviewed),
+            candidate => candidate.ReturnedToBody);
+        Assert.Equal("ルビ", returned.OcrText);
+        Assert.Equal(8, await migrated.GetSchemaVersionAsync(CancellationToken.None));
     }
 
     [Fact]

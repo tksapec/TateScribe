@@ -1,3 +1,7 @@
+param(
+    [switch]$SkipArchive
+)
+
 $ErrorActionPreference = 'Stop'
 & "$PSScriptRoot\test.ps1"
 if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
@@ -15,12 +19,17 @@ New-Item -ItemType Directory -Path $packagedRuntime, $packagedWorker | Out-Null
 Copy-Item (Join-Path $runtime '*') $packagedRuntime -Recurse -Force
 Copy-Item (Join-Path $PSScriptRoot '..\ocr-worker\worker.py') $packagedWorker -Force
 Copy-Item (Join-Path $PSScriptRoot '..\ocr-worker\requirements.lock') $packagedWorker -Force
-$archive = Join-Path $PSScriptRoot '..\artifacts\TateScribe-win-x64.zip'
-if (Test-Path $archive) { Remove-Item -LiteralPath $archive -Force }
-Add-Type -AssemblyName System.IO.Compression.FileSystem
-[System.IO.Compression.ZipFile]::CreateFromDirectory(
-    (Resolve-Path -LiteralPath $output).Path,
-    $archive,
-    [System.IO.Compression.CompressionLevel]::NoCompression,
-    $false)
-Write-Host "Created $archive"
+if ($SkipArchive) {
+    Write-Host 'Published win-x64 files without creating or replacing the release ZIP.'
+}
+else {
+    $archive = Join-Path $PSScriptRoot '..\artifacts\TateScribe-win-x64.zip'
+    if (Test-Path $archive) { Remove-Item -LiteralPath $archive -Force }
+    Add-Type -AssemblyName System.IO.Compression.FileSystem
+    [System.IO.Compression.ZipFile]::CreateFromDirectory(
+        (Resolve-Path -LiteralPath $output).Path,
+        $archive,
+        [System.IO.Compression.CompressionLevel]::NoCompression,
+        $false)
+    Write-Host "Created $archive"
+}

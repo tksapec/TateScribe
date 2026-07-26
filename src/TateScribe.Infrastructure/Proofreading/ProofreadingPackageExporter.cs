@@ -2,6 +2,7 @@ using System.IO.Compression;
 using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
+using TateScribe.Core.ChatGpt;
 using TateScribe.Core.Proofreading;
 
 namespace TateScribe.Infrastructure.Proofreading;
@@ -9,6 +10,12 @@ namespace TateScribe.Infrastructure.Proofreading;
 public sealed class ProofreadingPackageExporter
 {
     private static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.Web) { WriteIndented = true };
+    private readonly IChatGptPromptTemplateProvider promptTemplates;
+
+    public ProofreadingPackageExporter(IChatGptPromptTemplateProvider? promptTemplates = null)
+    {
+        this.promptTemplates = promptTemplates ?? new ChatGptPromptTemplateProvider();
+    }
 
     public async Task ExportAsync(ProofreadingPackageRequest request, CancellationToken cancellationToken)
     {
@@ -39,7 +46,7 @@ public sealed class ProofreadingPackageExporter
         }
     }
 
-    private static async Task WritePackageAsync(string root, ProofreadingPackageRequest request, CancellationToken cancellationToken)
+    private async Task WritePackageAsync(string root, ProofreadingPackageRequest request, CancellationToken cancellationToken)
     {
         var originalDirectory = Path.Combine(root, "images-original");
         Directory.CreateDirectory(originalDirectory);
@@ -79,7 +86,7 @@ public sealed class ProofreadingPackageExporter
         await File.WriteAllTextAsync(Path.Combine(root, "ocr.txt"),
             CreateOcrText(request, manifestPages), new UTF8Encoding(false), cancellationToken);
         await File.WriteAllTextAsync(Path.Combine(root, "instructions.md"),
-            Instructions, new UTF8Encoding(false), cancellationToken);
+            promptTemplates.GetTemplate(ChatGptTaskType.TextProofreading), new UTF8Encoding(false), cancellationToken);
         var reviewItems = request.Pages.SelectMany((page, index) => (page.ReviewItems ?? [])
             .Select(item => new { pageMarker = manifestPages[index].PageMarker, item.Code, item.Message, item.Text })).ToArray();
         await File.WriteAllTextAsync(Path.Combine(root, "review-items.json"),
@@ -112,19 +119,6 @@ public sealed class ProofreadingPackageExporter
 
     private static string HashText(string text) =>
         Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(text)));
-
-    private const string Instructions = """
-        # TateScribe 校正指示
-
-        添付画像を正本として OCR 本文を校正してください。誤記や欠落を適切に修正し、判断に悩む場合はユーザーへ確認してください。
-
-        - 各ページの校正済み本文は `[[TEXT_BEGIN]]` と `[[TEXT_END]]` の間だけに記入してください。
-        - `[[PAGE:xxxx]]`、`[[JOIN_TO_NEXT:...]]`、プロジェクト ID、バッチ ID は変更しないでください。
-        - ページ本文中の全角空白、半角空白、空行、章・節マーカーを保持してください。
-        - 判読不能箇所一覧と主な修正箇所一覧は `[[REPORT_BEGIN]]` と `[[REPORT_END]]` の間へ記入してください。
-        - 報告をページ本文の `TEXT_BEGIN` / `TEXT_END` 内へ書かないでください。
-        - ステータスバー、通知、ページ番号、写真、挿絵、画像内キャプションは本文へ追加しないでください。
-        """;
 
     private sealed record Manifest(
         int FormatVersion,
