@@ -1,5 +1,6 @@
 using DocumentFormat.OpenXml.Packaging;
 using DocumentFormat.OpenXml.Wordprocessing;
+using DocumentFormat.OpenXml.Validation;
 using TateScribe.Core.Export;
 using TateScribe.Infrastructure.Export;
 
@@ -52,6 +53,43 @@ public sealed class DocxExportTests : IDisposable
 
         using var word = WordprocessingDocument.Open(_path, false);
         Assert.Contains("pageBreakBefore", word.MainDocumentPart!.Document.OuterXml, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public async Task Export_defines_required_styles_and_validates_as_open_xml()
+    {
+        var exporter = new OpenXmlDocumentExporter();
+        var document = new ExportDocument([
+            new ExportParagraph(ExportStyle.Heading1, "章", null, DocumentElementRole.ChapterTitle),
+            new ExportParagraph(ExportStyle.Normal, "1", null, DocumentElementRole.SectionNumber),
+            new ExportParagraph(ExportStyle.Normal, "＊", null, DocumentElementRole.SceneBreak),
+            new ExportParagraph(ExportStyle.Normal, "　本文")
+        ], PageBreakBeforeChapters: true);
+
+        await exporter.ExportAsync(document, _path, CancellationToken.None);
+
+        using var word = WordprocessingDocument.Open(_path, false);
+        var styles = word.MainDocumentPart!.StyleDefinitionsPart!.Styles!;
+        foreach (var styleId in new[] { "Normal", "Heading1", "Heading2", "Heading3", "SectionNumber", "SceneBreak" })
+            Assert.Contains(styles.Elements<Style>(), style => style.StyleId == styleId);
+        var paragraphs = word.MainDocumentPart.Document.Body!.Elements<Paragraph>().ToArray();
+        Assert.Equal("SectionNumber", paragraphs[1].ParagraphProperties!.ParagraphStyleId!.Val!.Value);
+        Assert.Equal("SceneBreak", paragraphs[2].ParagraphProperties!.ParagraphStyleId!.Val!.Value);
+        Assert.Empty(new OpenXmlValidator().Validate(word));
+    }
+
+    [Fact]
+    public async Task Export_preserves_an_intentional_blank_body_paragraph()
+    {
+        var document = BookDocumentAssembler.Assemble(["第一段落\n\n第二段落"]);
+
+        await new OpenXmlDocumentExporter().ExportAsync(document, _path, CancellationToken.None);
+
+        using var word = WordprocessingDocument.Open(_path, false);
+        var paragraphs = word.MainDocumentPart!.Document.Body!.Elements<Paragraph>().ToArray();
+        Assert.Equal(3, paragraphs.Length);
+        Assert.Equal(string.Empty, paragraphs[1].InnerText);
+        Assert.Empty(new OpenXmlValidator().Validate(word));
     }
 
     public void Dispose()

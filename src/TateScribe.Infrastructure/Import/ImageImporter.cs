@@ -15,7 +15,14 @@ public sealed class ImageImporter
             var file = new FileInfo(sourcePath);
             if (!file.Exists) throw new FileNotFoundException("Image source was not found.", sourcePath);
             if (!IsSupported(file.Extension)) throw new NotSupportedException($"Unsupported image type: {file.Extension}");
-            candidates.Add((new PageSortCandidate(file.Name, null, new DateTimeOffset(file.CreationTimeUtc), new DateTimeOffset(file.LastWriteTimeUtc), null), file.FullName, await HashAsync(file.FullName, cancellationToken)));
+            candidates.Add((new PageSortCandidate(
+                file.Name,
+                ImageTimestampReader.TryRead(file.FullName),
+                new DateTimeOffset(file.CreationTimeUtc),
+                new DateTimeOffset(file.LastWriteTimeUtc),
+                PageOrdering.GetFileNameTimestamp(file.Name)),
+                file.FullName,
+                await HashAsync(file.FullName, cancellationToken)));
         }
 
         var order = PageOrdering.Sort(candidates.Select(x => x.Sort));

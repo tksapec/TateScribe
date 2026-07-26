@@ -12,7 +12,7 @@
 4. Layout services create columns and ordered text segments. A reviewable `JoinKind` links columns and pages; `DirectJoin` is the default.
 5. PaddleOCR words, Tesseract auxiliary text, OCR runs, merge proposals, manual edits, and confirmed text are separate SQLite layers. Re-OCR refreshes only machine-owned layers.
 6. `ProofreadingPackageExporter` writes instructions, manifest, marker-based OCR draft, review items, and stable image names. `ProofreadingImportParser` verifies the package provenance before the repository writes confirmed page text.
-7. `DocxExportService` consumes the resolved text view in Confirmed → Manual → Suggested → Paddle order and produces Open XML elements, adding ruby only when parent/ruby alignment is confirmed.
+7. `DocumentExportService` consumes the resolved active text view in Confirmed → Manual → Suggested → Paddle order and produces Open XML elements, adding ruby only when parent/ruby alignment is confirmed.
 
 ## Main interfaces
 
@@ -37,6 +37,17 @@ public interface IDocumentExporter
 
 ## Safety boundaries
 
+## Proofreading and review services
+
+- `ProofreadingPackageService` selects provenance-aware text, combines stored ReviewItems, prepares optional crop images, exports format 2, and records the DB snapshot.
+- `ProofreadingImportService` reads text/ZIP input, invokes the strict versioned parser, calculates page diffs, and saves only accepted non-error pages.
+- `OcrOrchestrationService` owns the persistent JSON Lines worker for a batch, records stage-specific failures, and continues after page-local failures.
+- `DocumentExportService` applies PageRole policy and boundary joins before Open XML generation.
+- `PageValidationService` is a pure Core validator; SQLite stores its results in `review_items`.
+
+SQLite schema version 6 adds independent OCR status, last/baseline OCR run identifiers, export snapshots, text-version baselines, OCR failures, persistent ReviewItems, OCR word overrides, and boundary join type. Migrations inspect columns with `PRAGMA table_info`, run in one transaction, and only advance `schema_version` after success.
+
+The Python worker remains offline and process-local. PaddleOCR is lazily cached by detection/recognition model directories; Tesseract does not initialize Paddle. Restarting or cancelling the worker discards the process cache safely.
 - UI commands are asynchronous and cancelable; only ViewModels touch UI dispatching.
 - OCR JSON uses a versioned envelope with one request and one terminal response per line. Unknown fields are ignored; malformed or unexpected responses fail the request with a retry action.
 - The database owns user changes. Cache and worker files are disposable and excluded from source control.

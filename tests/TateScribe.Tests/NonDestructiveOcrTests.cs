@@ -82,6 +82,6 @@ public sealed class NonDestructiveOcrTests : IDisposable
 
     public void Dispose()
     {
-        if (Directory.Exists(_directory)) Directory.Delete(_directory, recursive: true);
+        TestFileCleanup.DeleteDirectory(_directory);
     }
 }

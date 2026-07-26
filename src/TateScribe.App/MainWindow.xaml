@@ -63,7 +63,7 @@
       </StackPanel>
       <StackPanel DockPanel.Dock="Bottom" Margin="0,0,0,8">
         <ComboBox x:Name="DisplayProfileSelector" Margin="0,0,0,4" ToolTip="表示形式です。例: 通常の本文は ReflowVertical、印刷ページ単位を扱う場合は FixedPageVertical を選びます。" />
-        <ComboBox x:Name="PageRoleSelector" Margin="0,0,0,4" ToolTip="ページ種別です。例: 本文は Body、章見出しだけのページは ChapterTitle、挿絵は Illustration を選びます。Illustration、Blank、Other はDOCX本文から除外されます。" />
+        <ComboBox x:Name="PageRoleSelector" Margin="0,0,0,4" ToolTip="ページ種別です。例: 本文は Body、章見出しだけのページは ChapterTitle、挿絵は Illustration を選びます。IllustrationとBlankは除外し、Otherは本文があれば確認後に含めます。" />
         <TextBox x:Name="PrintedPageNumberEditor" Margin="0,0,0,4" ToolTip="印刷ページ番号です。FixedPageVertical を選んだページで、例: 42 のように入力します。" />
         <Button Padding="8,4" Click="SavePageMetadata" ToolTip="選択した表示形式・ページ種別・印刷ページ番号を、現在選んでいるページへ保存します。">ページ種別・表示形式を保存</Button>
       </StackPanel>
@@ -125,7 +125,11 @@
           </Border>
           <TextBox x:Name="TextEditor" Grid.Column="2" AcceptsReturn="True" TextWrapping="Wrap" VerticalScrollBarVisibility="Auto" FontSize="16" />
         </Grid>
-        <Button Grid.Row="3" HorizontalAlignment="Right" Margin="0,12,0,0" Padding="12,6" Click="SaveManualText">手動修正を保存</Button>
+        <StackPanel Grid.Row="3" Orientation="Horizontal" HorizontalAlignment="Right" Margin="0,12,0,0">
+          <Button x:Name="PageReviewButton" Margin="0,0,8,0" Padding="12,6" Click="ShowPageReview"
+                  ToolTip="選択ページのManual/Confirmed履歴を復元し、ルビ候補の分類と下書きへの採否を変更します。">本文履歴・ルビ候補</Button>
+          <Button Padding="12,6" Click="SaveManualText">手動修正を保存</Button>
+        </StackPanel>
       </Grid>
     </Border>
   </Grid>

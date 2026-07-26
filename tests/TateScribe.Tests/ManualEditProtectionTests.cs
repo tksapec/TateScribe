@@ -28,6 +28,6 @@ public sealed class ManualEditProtectionTests : IDisposable
 
     public void Dispose()
     {
-        if (Directory.Exists(_directory)) Directory.Delete(_directory, true);
+        TestFileCleanup.DeleteDirectory(_directory);
     }
 }

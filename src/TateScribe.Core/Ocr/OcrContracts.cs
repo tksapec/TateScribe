@@ -11,7 +11,13 @@ public interface IOcrWorker : IAsyncDisposable
     Task<OcrPageResult> RecognizeAsync(OcrRequest request, CancellationToken cancellationToken);
 }
 
-public sealed class OcrWorkerException(string message, bool canRetry) : Exception(message)
+public sealed class OcrWorkerException(
+    string message,
+    bool canRetry,
+    string? stage = null,
+    string? exceptionType = null) : Exception(message)
 {
     public bool CanRetry { get; } = canRetry;
+    public string? Stage { get; } = stage;
+    public string? ExceptionType { get; } = exceptionType;
 }

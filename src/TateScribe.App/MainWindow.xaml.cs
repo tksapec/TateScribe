@@ -16,6 +16,7 @@ using TateScribe.Infrastructure.Import;
 using TateScribe.Infrastructure.Storage;
 using TateScribe.Core.Proofreading;
 using TateScribe.Infrastructure.Proofreading;
+using TateScribe.App.Services;
 
 namespace TateScribe.App;
 
@@ -53,6 +54,8 @@ public partial class MainWindow : Window
                     await repository.SavePagesAsync(_pages, CancellationToken.None);
                 }
             }
+            await ValidatePagesAsync(repository);
+            _pages = (await repository.LoadPagesAsync(CancellationToken.None)).ToList();
             RefreshPages();
             var missingSourceCount = _pages.Count(page => !File.Exists(page.SourcePath));
             if (missingSourceCount > 0) ReviewStatus.Text = $"要確認: 元画像が見つからないページが {missingSourceCount} 件あります。";
@@ -81,6 +84,8 @@ public partial class MainWindow : Window
                 await using var repository = await SqliteProjectRepository.CreateAsync(_projectDirectory, CancellationToken.None);
                 await repository.SavePagesAsync(mergedPages, CancellationToken.None);
                 _pages = mergedPages.ToList();
+                await ValidatePagesAsync(repository);
+                _pages = (await repository.LoadPagesAsync(CancellationToken.None)).ToList();
                 RefreshPages();
             }
             catch (Exception exception)
@@ -108,14 +113,10 @@ public partial class MainWindow : Window
         _pages = _pages.Select(page => page.Id == selected.Id ? PageUsageEditor.Toggle(page) : page).ToList();
         await using var repository = await SqliteProjectRepository.CreateAsync(_projectDirectory, CancellationToken.None);
         await repository.SavePagesAsync(_pages, CancellationToken.None);
+        await ValidatePagesAsync(repository);
+        _pages = (await repository.LoadPagesAsync(CancellationToken.None)).ToList();
         RefreshPages();
         PageList.SelectedItem = _pages.Single(page => page.Id == selected.Id);
-        var printedNumbers = _pages.Where(page => page.DisplayProfile == DisplayProfile.FixedPageVertical)
-            .OrderBy(page => page.SortOrder)
-            .Select(page => int.TryParse(page.PrintedPageNumber, NumberStyles.Integer, CultureInfo.InvariantCulture, out var number) ? number : (int?)null)
-            .Where(number => number.HasValue).Select(number => number!.Value).ToArray();
-        if (printedNumbers.Zip(printedNumbers.Skip(1)).Any(pair => pair.Second <= pair.First || pair.Second > pair.First + 1))
-            ReviewStatus.Text = "要確認: 固定ページの印刷ページ番号に順序矛盾または欠落候補があります。";
     }
 
     private async Task MoveSelectedPageAsync(int offset)
@@ -124,6 +125,8 @@ public partial class MainWindow : Window
         _pages = PageOrderEditor.Move(_pages, selected.Id, offset).ToList();
         await using var repository = await SqliteProjectRepository.CreateAsync(_projectDirectory, CancellationToken.None);
         await repository.SavePagesAsync(_pages, CancellationToken.None);
+        await ValidatePagesAsync(repository);
+        _pages = (await repository.LoadPagesAsync(CancellationToken.None)).ToList();
         RefreshPages();
         PageList.SelectedItem = _pages.Single(page => page.Id == selected.Id);
     }
@@ -134,6 +137,8 @@ public partial class MainWindow : Window
         _pages = _pages.Select(page => page.Id == selected.Id ? PageRotationEditor.Rotate(page, degrees) : page).ToList();
         await using var repository = await SqliteProjectRepository.CreateAsync(_projectDirectory, CancellationToken.None);
         await repository.SavePagesAsync(_pages, CancellationToken.None);
+        await ValidatePagesAsync(repository);
+        _pages = (await repository.LoadPagesAsync(CancellationToken.None)).ToList();
         RefreshPages();
         PageList.SelectedItem = _pages.Single(page => page.Id == selected.Id);
     }
@@ -149,6 +154,8 @@ public partial class MainWindow : Window
         _pages = _pages.Select(page => page.Id == selected.Id ? page with { Crop = crop } : page).ToList();
         await using var repository = await SqliteProjectRepository.CreateAsync(_projectDirectory, CancellationToken.None);
         await repository.SavePagesAsync(_pages, CancellationToken.None);
+        await ValidatePagesAsync(repository);
+        _pages = (await repository.LoadPagesAsync(CancellationToken.None)).ToList();
         RefreshPages();
         PageList.SelectedItem = _pages.Single(page => page.Id == selected.Id);
     }
@@ -203,6 +210,8 @@ public partial class MainWindow : Window
             textState.ConfirmedText is not null ? "表示中: ChatGPT取込み済み確定本文" :
             textState.ManualText is not null ? "表示中: 手動修正文" :
             textState.SuggestedText is not null ? "表示中: 補正候補（OCR原本は保持されています）" : "表示中: PaddleOCR原本から復元した下書き";
+        if (selected.ProofreadingStatus == ProofreadingStatus.Stale)
+            TextSourceStatus.Text += "／校正済みですが、その後OCRが更新されています。本文を確認してください。";
         var source = new BitmapImage(new Uri(selected.SourcePath, UriKind.Absolute));
         PagePreview.Source = selected.RotationDegrees == 0
             ? source
@@ -210,9 +219,11 @@ public partial class MainWindow : Window
         _previewZoom = 1;
         ApplyPreviewZoom();
         UpdateCropOverlay(crop);
-        ReviewStatus.Text = reconstruction.ReviewItems.Count == 0
-            ? "要確認の低信頼度文字はありません。"
-            : $"要確認: 低信頼度文字 {reconstruction.ReviewItems.Count} 件";
+        var storedReviewCount = (await repository.LoadReviewItemsAsync(selected.Id, CancellationToken.None)).Count;
+        var rubyCount = (await repository.LoadLatestOcrWordStatesAsync(selected.Id, CancellationToken.None)).Count(word => word.Role == "RubyCandidate");
+        var failures = await repository.LoadOcrFailuresAsync(selected.Id, CancellationToken.None);
+        ReviewStatus.Text = $"要確認: 低信頼度 {reconstruction.ReviewItems.Count}／検証 {storedReviewCount}／ルビ候補 {rubyCount}"
+            + (failures.Count == 0 ? string.Empty : $"／OCR失敗 {failures.Count}（最新: {failures[0].Stage} {failures[0].Message}）");
     }
 
     private async void SaveManualText(object sender, RoutedEventArgs e)
@@ -224,6 +235,12 @@ public partial class MainWindow : Window
         RefreshPages();
     }
 
+    private void ShowPageReview(object sender, RoutedEventArgs e)
+    {
+        if (_projectDirectory is null || PageList.SelectedItem is not ProjectPage selected) return;
+        new PageReviewWindow(_projectDirectory, selected) { Owner = this }.ShowDialog();
+    }
+
     private async void SavePageMetadata(object sender, RoutedEventArgs e)
     {
         if (_projectDirectory is null || PageList.SelectedItem is not ProjectPage selected ||
@@ -233,6 +250,8 @@ public partial class MainWindow : Window
             : page).ToList();
         await using var repository = await SqliteProjectRepository.CreateAsync(_projectDirectory, CancellationToken.None);
         await repository.SavePagesAsync(_pages, CancellationToken.None);
+        await ValidatePagesAsync(repository);
+        _pages = (await repository.LoadPagesAsync(CancellationToken.None)).ToList();
         RefreshPages();
         PageList.SelectedItem = _pages.Single(page => page.Id == selected.Id);
     }
@@ -301,27 +320,10 @@ public partial class MainWindow : Window
         try
         {
             IsEnabled = false;
+            await new ProofreadingPackageService().ExportAsync(
+                _projectDirectory, selectedPages, destination, format,
+                IncludeCroppedImages.IsChecked == true, CancellationToken.None);
             await using var repository = await SqliteProjectRepository.CreateAsync(_projectDirectory, CancellationToken.None);
-            var cacheDirectory = Path.Combine(_projectDirectory, ".tatescribe-cache");
-            var preprocessor = new ScreenshotPreprocessor();
-            var packagePages = new List<ProofreadingPackagePage>();
-            foreach (var page in selectedPages)
-            {
-                if (!File.Exists(page.SourcePath)) throw new FileNotFoundException("校正パッケージに含める元画像が見つかりません。", page.SourcePath);
-                var state = await repository.LoadPageTextStateAsync(page.Id, CancellationToken.None);
-                var reconstruction = VerticalTextReconstruction.Reconstruct(state.RawPaddleWords, 20, .75);
-                string? cropped = null;
-                if (IncludeCroppedImages.IsChecked == true)
-                    cropped = (await preprocessor.PrepareAsync(page.SourcePath, cacheDirectory, page.Crop ?? NormalizedCrop.Full, page.RotationDegrees, CancellationToken.None)).CachePath;
-                packagePages.Add(new ProofreadingPackagePage(page.Id, page.SortOrder, page.FileName, page.SourceHash, page.SourcePath, cropped,
-                    reconstruction.Text, state.SuggestedText, reconstruction.ReviewItems.Count, page.PageRole.ToString(), page.DisplayProfile.ToString(),
-                    reconstruction.ReviewItems.Select(item => new ProofreadingReviewItem(item.Code, item.Message, item.Word?.Text ?? string.Empty)).ToArray()));
-            }
-            var batchId = Guid.NewGuid();
-            var request = new ProofreadingPackageRequest(await repository.GetProjectIdAsync(CancellationToken.None), Path.GetFileName(Path.TrimEndingDirectorySeparator(_projectDirectory)), batchId,
-                destination, format, packagePages);
-            await new ProofreadingPackageExporter().ExportAsync(request, CancellationToken.None);
-            await repository.RecordProofreadingExportAsync(batchId, selectedPages.Select(page => page.Id).ToArray(), CancellationToken.None);
             _pages = (await repository.LoadPagesAsync(CancellationToken.None)).ToList();
             RefreshPages();
             MessageBox.Show(this, $"校正用パッケージを出力しました。{Environment.NewLine}{destination}", "TateScribe", MessageBoxButton.OK, MessageBoxImage.Information);
@@ -343,52 +345,30 @@ public partial class MainWindow : Window
         if (dialog.ShowDialog(this) != true) return;
         try
         {
-            var content = await ReadProofreadingContentAsync(dialog.FileName, CancellationToken.None);
-            var document = ProofreadingImportParser.Parse(content);
-            await using var repository = await SqliteProjectRepository.CreateAsync(_projectDirectory, CancellationToken.None);
-            var preview = await repository.PrepareConfirmedImportAsync(document, CancellationToken.None);
-            var details = await BuildImportDetailsAsync(repository, preview, CancellationToken.None);
-            if (preview.Issues.Any(issue => issue.IsError))
+            var service = new ProofreadingImportService();
+            var preview = await service.PrepareAsync(_projectDirectory, dialog.FileName, CancellationToken.None);
+            var details = ProofreadingImportService.BuildDetails(preview);
+            if (preview.Issues.Any(issue => issue.IsError && issue.PageMarker is null))
             {
                 MessageBox.Show(this, $"検証エラーのため本文は保存しません。{Environment.NewLine}{details}", "校正結果の検証", MessageBoxButton.OK, MessageBoxImage.Warning);
                 return;
             }
-            var selection = new ProofreadingImportWindow(preview, details) { Owner = this };
+            var selection = new ProofreadingImportWindow(preview, details, pageId =>
+            {
+                PageList.SelectedItem = _pages.SingleOrDefault(page => page.Id == pageId);
+                PageList.ScrollIntoView(PageList.SelectedItem);
+            }) { Owner = this };
             if (selection.ShowDialog() != true) return;
-            await repository.SaveConfirmedTextAsync(preview, selection.AcceptedMarkers, CancellationToken.None);
+            await service.SaveAsync(_projectDirectory, preview, selection.AcceptedMarkers, CancellationToken.None);
+            await using var repository = await SqliteProjectRepository.CreateAsync(_projectDirectory, CancellationToken.None);
             _pages = (await repository.LoadPagesAsync(CancellationToken.None)).ToList();
             RefreshPages();
-            ReviewStatus.Text = $"校正済み本文を {preview.Candidates.Count} ページ保存しました。";
+            ReviewStatus.Text = $"校正済み本文を {selection.AcceptedMarkers.Count} ページ保存しました。";
         }
         catch (Exception exception)
         {
             MessageBox.Show(this, exception.Message, "校正済みテキストを取り込めません", MessageBoxButton.OK, MessageBoxImage.Error);
         }
-    }
-
-    private static async Task<string> ReadProofreadingContentAsync(string path, CancellationToken cancellationToken)
-    {
-        if (!string.Equals(Path.GetExtension(path), ".zip", StringComparison.OrdinalIgnoreCase)) return await File.ReadAllTextAsync(path, cancellationToken);
-        using var archive = ZipFile.OpenRead(path);
-        var entry = archive.Entries.SingleOrDefault(entry => string.Equals(entry.FullName, "proofread.txt", StringComparison.OrdinalIgnoreCase))
-            ?? archive.Entries.SingleOrDefault(entry => string.Equals(entry.FullName, "proofread.md", StringComparison.OrdinalIgnoreCase))
-            ?? throw new InvalidDataException("ZIP内に proofread.txt または proofread.md がありません。");
-        await using var stream = entry.Open();
-        using var reader = new StreamReader(stream, detectEncodingFromByteOrderMarks: true);
-        return await reader.ReadToEndAsync(cancellationToken);
-    }
-
-    private static async Task<string> BuildImportDetailsAsync(SqliteProjectRepository repository, ProofreadingImportPreview preview, CancellationToken cancellationToken)
-    {
-        var lines = preview.Issues.Select(issue => $"{(issue.IsError ? "エラー" : "警告")}: {issue.Code} {issue.PageMarker ?? string.Empty}").ToList();
-        foreach (var candidate in preview.Candidates)
-        {
-            var state = await repository.LoadPageTextStateAsync(candidate.PageId, cancellationToken);
-            var baseline = state.ManualText ?? state.SuggestedText ?? VerticalTextReconstruction.Reconstruct(state.RawPaddleWords, 20, .75).Text;
-            var delta = candidate.ConfirmedText.Length - baseline.Length;
-            lines.Add($"PAGE {candidate.PageMarker}: {baseline.Length} → {candidate.ConfirmedText.Length} 文字（{delta:+#;-#;0}）、追加・削除・変更は確定前プレビュー対象");
-        }
-        return string.Join(Environment.NewLine, lines);
     }
 
     private async void ExportDocx(object sender, RoutedEventArgs e)
@@ -397,28 +377,18 @@ public partial class MainWindow : Window
         try
         {
             IsEnabled = false;
-            await using var repository = await SqliteProjectRepository.CreateAsync(_projectDirectory, CancellationToken.None);
-            var pageTexts = new List<string>();
-            var skippedPages = 0;
-            var unproofreadPages = 0;
-            foreach (var page in _pages.Where(page => page.IsIncluded).OrderBy(page => page.SortOrder))
-            {
-                var state = await repository.LoadPageTextStateAsync(page.Id, CancellationToken.None);
-                if (page.PageRole is PageRole.Illustration or PageRole.Blank or PageRole.Other) continue;
-                var reconstructed = VerticalTextReconstruction.Reconstruct(state.RawPaddleWords, 20, 0.75).Text;
-                var text = state.ConfirmedText ?? state.ManualText ?? state.SuggestedText ?? reconstructed;
-                if (state.ConfirmedText is null) unproofreadPages++;
-                if (!string.IsNullOrWhiteSpace(text))
-                {
-                    pageTexts.Add(page.PageRole == PageRole.ChapterTitle ? BookDocumentAssembler.CreateChapterPageText(text) : text);
-                }
-                else skippedPages++;
-            }
-            if (unproofreadPages > 0 && MessageBox.Show(this, $"未校正ページ {unproofreadPages} 件を含めてDOCXを出力します。続行しますか？", "未校正本文を含む出力", MessageBoxButton.YesNo, MessageBoxImage.Warning) != MessageBoxResult.Yes) return;
+            var preparation = await new DocumentExportService().PrepareAsync(
+                _projectDirectory, _pages, PageBreakBeforeChapters.IsChecked == true, CancellationToken.None);
+            if (preparation.OtherPagesWithText.Count > 0
+                && MessageBox.Show(this,
+                    $"PageRole=Other の本文ページ {preparation.OtherPagesWithText.Count} 件を含めます。続行しますか？",
+                    "Otherページの確認", MessageBoxButton.YesNo, MessageBoxImage.Warning) != MessageBoxResult.Yes) return;
+            if (preparation.UnproofreadPageCount > 0 && MessageBox.Show(this, $"未校正ページ {preparation.UnproofreadPageCount} 件を含めてDOCXを出力します。続行しますか？", "未校正本文を含む出力", MessageBoxButton.YesNo, MessageBoxImage.Warning) != MessageBoxResult.Yes) return;
             var outputPath = BookFolderPaths.GetDocumentPath(_projectDirectory);
-            var document = BookDocumentAssembler.Assemble(pageTexts) with { PageBreakBeforeChapters = PageBreakBeforeChapters.IsChecked == true };
-            await new OpenXmlDocumentExporter().ExportAsync(document, outputPath, CancellationToken.None);
-            var summary = skippedPages == 0 ? $"{pageTexts.Count} ページを出力しました。" : $"{pageTexts.Count} ページを出力し、本文のない {skippedPages} ページを除外しました。";
+            await new OpenXmlDocumentExporter().ExportAsync(preparation.Document, outputPath, CancellationToken.None);
+            var summary = preparation.EmptyPageCount == 0
+                ? $"{preparation.IncludedPageCount} ページを出力しました。"
+                : $"{preparation.IncludedPageCount} ページを出力し、本文のない {preparation.EmptyPageCount} ページを除外しました。";
             MessageBox.Show(this, $"DOCXを出力しました。{Environment.NewLine}{summary}{Environment.NewLine}{outputPath}", "TateScribe", MessageBoxButton.OK, MessageBoxImage.Information);
         }
         catch (Exception exception)
@@ -466,38 +436,23 @@ public partial class MainWindow : Window
             RunOcrButton.IsEnabled = false;
             RunAllOcrButton.IsEnabled = false;
             CancelOcrButton.IsEnabled = true;
-            await using var worker = new JsonLinesOcrWorker(python, workerScript);
-            await using var repository = await SqliteProjectRepository.CreateAsync(projectDirectory, CancellationToken.None);
-            var preprocessor = new ScreenshotPreprocessor();
-            var cacheDirectory = Path.Combine(projectDirectory, ".tatescribe-cache");
-            var failedPages = new List<string>();
-            for (var index = 0; index < pages.Count; index++)
+            var progress = new Progress<(int Current, int Total, string FileName)>(value =>
+                ReviewStatus.Text = $"OCR実行中: {value.Current}/{value.Total} {value.FileName}");
+            var result = await new OcrOrchestrationService().RunAsync(
+                projectDirectory, pages, python, workerScript, progress, _ocrCancellation.Token);
+            if (PageList.SelectedItem is ProjectPage selected)
             {
-                var page = pages[index];
-                ReviewStatus.Text = $"OCR実行中: {index + 1}/{pages.Count} {page.FileName}";
-                try
+                var outcome = result.Pages.SingleOrDefault(page => page.PageId == selected.Id);
+                if (outcome?.SuggestedText is not null)
                 {
-                    if (!File.Exists(page.SourcePath)) throw new FileNotFoundException("OCR対象の元画像が見つかりません。", page.SourcePath);
-                    var prepared = await preprocessor.PrepareAsync(page.SourcePath, cacheDirectory, page.Crop ?? NormalizedCrop.Full, page.RotationDegrees, _ocrCancellation.Token);
-                    var paddle = await worker.RecognizeAsync(new OcrRequest(Guid.NewGuid().ToString("N"), "paddle", prepared.CachePath), _ocrCancellation.Token);
-                    var tesseract = await worker.RecognizeAsync(new OcrRequest(Guid.NewGuid().ToString("N"), "tesseract", prepared.CachePath), _ocrCancellation.Token);
-                    var paddleText = VerticalTextReconstruction.Reconstruct(paddle.Words, 20, 0.75).Text;
-                    var rawTesseractText = string.Concat(tesseract.Words.Select(word => word.Text));
-                    var orderedPaddleWords = VerticalTextReconstruction.OrderWordsForReadingWithRawOrdinals(paddle.Words, 20);
-                    var proposal = PunctuationMerger.ProposeWithRawWordOrdinals(paddleText, rawTesseractText, orderedPaddleWords, 16);
-                    await repository.SaveOcrAnalysisAsync(page.Id, paddle, rawTesseractText, proposal, _ocrCancellation.Token);
-                    if (PageList.SelectedItem is ProjectPage selected && selected.Id == page.Id)
-                    {
-                        TextEditor.Text = proposal.SuggestedText;
-                        TextSourceStatus.Text = "表示中: 補正候補（PaddleOCR原本と座標は保持されています）";
-                    }
+                    TextEditor.Text = outcome.SuggestedText;
+                    TextSourceStatus.Text = "表示中: 補正候補（PaddleOCR原本と座標は保持されています）";
                 }
-                catch (OperationCanceledException) { throw; }
-                catch (Exception) { failedPages.Add(page.FileName); }
             }
-            ReviewStatus.Text = failedPages.Count == 0
+            ReviewStatus.Text = result.Failures.Count == 0
                 ? $"OCR完了: {pages.Count} ページ"
-                : $"OCR完了: {pages.Count - failedPages.Count}/{pages.Count} ページ（失敗: {string.Join(", ", failedPages)}）";
+                : $"OCR完了: {result.SucceededCount}/{pages.Count} ページ（失敗: {string.Join(", ", result.Failures.Select(failure => $"{failure.FileName}: {failure.Stage} {failure.Message}"))}）";
+            await using var repository = await SqliteProjectRepository.CreateAsync(projectDirectory, CancellationToken.None);
             _pages = (await repository.LoadPagesAsync(CancellationToken.None)).ToList();
             RefreshPages();
         }
@@ -524,6 +479,15 @@ public partial class MainWindow : Window
     }
 
     private void CancelOcr(object sender, RoutedEventArgs e) => _ocrCancellation?.Cancel();
+
+    private async Task ValidatePagesAsync(SqliteProjectRepository repository)
+    {
+        var issues = PageValidationService.Validate(_pages);
+        await repository.ReplacePageValidationIssuesAsync(issues, CancellationToken.None);
+        ReviewStatus.Text = issues.Count == 0
+            ? "固定ページの印刷ページ番号に矛盾はありません。"
+            : $"要確認: 印刷ページ番号 {issues.Count} 件（一覧は校正パッケージにも含まれます）";
+    }
 
     private static string ResolveRuntimePath(params string[] parts)
     {

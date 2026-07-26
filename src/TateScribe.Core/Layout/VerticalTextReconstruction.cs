@@ -48,6 +48,25 @@ public static class VerticalTextReconstruction
         return new ReconstructedPage(JoinColumnsWithParagraphBreaks(columns), reviewItems);
     }
 
+    public static ReconstructedPage ReconstructReviewed(
+        IReadOnlyList<OcrWordReviewState> words,
+        double columnTolerance,
+        double lowConfidenceThreshold)
+    {
+        var included = words.Where(word => word.IncludedInDraft).Select(word => word.Word).ToArray();
+        var glyphs = included.Select(word => new Glyph(word.Text, (word.Left + word.Right) / 2, word.Top)).ToArray();
+        var lookup = included.GroupBy(word => new Glyph(word.Text, (word.Left + word.Right) / 2, word.Top))
+            .ToDictionary(group => group.Key, group => new Queue<OcrWord>(group));
+        var columns = VerticalReadingOrder.OrderColumns(glyphs, columnTolerance)
+            .Select(column => column.Select(glyph => lookup[glyph].Dequeue()).ToArray())
+            .ToArray();
+        var ordered = columns.SelectMany(column => column).ToArray();
+        var reviewItems = ordered.Where(word => word.Confidence < lowConfidenceThreshold)
+            .Select(word => new ReviewItem("LowConfidence", $"OCR confidence {word.Confidence:P0} requires review.", word))
+            .ToArray();
+        return new ReconstructedPage(JoinColumnsWithParagraphBreaks(columns), reviewItems);
+    }
+
     public static string JoinPages(IEnumerable<ReconstructedPage> pages) => string.Concat(pages.Select(page => page.Text));
 
     private static string JoinColumnsWithParagraphBreaks(IReadOnlyList<OcrWord[]> columns)

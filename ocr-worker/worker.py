@@ -6,6 +6,58 @@ import sys
 from pathlib import Path
 
 PROTOCOL_VERSION = 1
+_paddle_engine = None
+_paddle_engine_config = None
+_paddle_initialization_error = None
+
+
+def reset_paddle_engine_cache() -> None:
+    """Clear process-local state. Primarily useful when restarting or testing the worker."""
+    global _paddle_engine, _paddle_engine_config, _paddle_initialization_error
+    _paddle_engine = None
+    _paddle_engine_config = None
+    _paddle_initialization_error = None
+
+
+def get_paddle_engine(det_dir: Path, rec_dir: Path):
+    global _paddle_engine, _paddle_engine_config, _paddle_initialization_error
+    config = (str(det_dir.resolve()), str(rec_dir.resolve()))
+    if _paddle_engine is not None and _paddle_engine_config == config:
+        return _paddle_engine
+
+    from paddleocr import PaddleOCR
+    try:
+        engine = PaddleOCR(
+            text_detection_model_dir=config[0],
+            text_recognition_model_dir=config[1],
+            use_doc_orientation_classify=False,
+            use_doc_unwarping=False,
+            use_textline_orientation=False,
+        )
+    except Exception as error:
+        _paddle_engine = None
+        _paddle_engine_config = None
+        _paddle_initialization_error = {
+            "exceptionType": type(error).__name__,
+            "message": str(error),
+        }
+        raise
+    _paddle_engine = engine
+    _paddle_engine_config = config
+    _paddle_initialization_error = None
+    return engine
+
+
+def error_response(request_id, stage: str, error: Exception, retryable: bool = True) -> dict:
+    return {
+        "protocolVersion": PROTOCOL_VERSION,
+        "requestId": request_id,
+        "status": "error",
+        "stage": stage,
+        "exceptionType": type(error).__name__,
+        "error": str(error),
+        "retryable": retryable,
+    }
 
 
 def response_for(request: dict) -> dict:
@@ -18,12 +70,12 @@ def response_for(request: dict) -> dict:
         try:
             return paddle_response(request)
         except Exception as error:  # worker boundary: return a structured, retryable error
-            return {"protocolVersion": PROTOCOL_VERSION, "requestId": request_id, "status": "error", "error": str(error)}
+            return error_response(request_id, "PaddleOCR", error)
     if request.get("engine") == "tesseract":
         try:
             return tesseract_response(request)
         except Exception as error:
-            return {"protocolVersion": PROTOCOL_VERSION, "requestId": request_id, "status": "error", "error": str(error)}
+            return error_response(request_id, "Tesseract", error)
     return {"protocolVersion": PROTOCOL_VERSION, "requestId": request_id, "status": "error", "error": "OCR engine is not configured with a local model"}
 
 
@@ -38,14 +90,7 @@ def paddle_response(request: dict) -> dict:
     if not det_dir.is_dir() or not rec_dir.is_dir():
         raise ValueError("Local PaddleOCR models are missing; run setup before OCR. Runtime downloads are disabled.")
     os.environ["PADDLE_PDX_DISABLE_MODEL_SOURCE_CHECK"] = "True"
-    from paddleocr import PaddleOCR
-    engine = PaddleOCR(
-        text_detection_model_dir=str(det_dir),
-        text_recognition_model_dir=str(rec_dir),
-        use_doc_orientation_classify=False,
-        use_doc_unwarping=False,
-        use_textline_orientation=False,
-    )
+    engine = get_paddle_engine(det_dir, rec_dir)
     result = next(iter(engine.predict(
         str(image_path),
         text_det_thresh=0.15,

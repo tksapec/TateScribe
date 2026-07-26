@@ -15,7 +15,10 @@ public sealed record RubyAnnotation(string ParentText, string RubyText);
 
 public sealed record ExportParagraph(ExportStyle Style, string Text, RubyAnnotation? Ruby = null, DocumentElementRole Role = DocumentElementRole.BodyParagraph);
 
-public sealed record ExportDocument(IReadOnlyList<ExportParagraph> Paragraphs, bool PageBreakBeforeChapters = false);
+public sealed record ExportDocument(
+    IReadOnlyList<ExportParagraph> Paragraphs,
+    bool PageBreakBeforeChapters = false,
+    string JapaneseFontName = "游明朝");
 
 public interface IDocumentExporter
 {

@@ -17,4 +17,11 @@ Use local reflow and fixed-page screenshot samples; do not commit them. Verify 4
 
 ## Commands
 
+## Hardened workflow coverage
+
+Automated coverage verifies source priority and manifest provenance; post-confirmation Manual activation; format 2 marker validation including mandatory joins/report isolation/whitespace/round-trip; format 1 compatibility; export staleness; Manual/Confirmed history; re-OCR and cancellation state retention; bounded diff counts and partial acceptance; one-time Paddle initialization; structured OCR failures; EXIF ordering/fallback; printed-number validation; RubyCandidate status/overrides; Other page inclusion; chapter number/title handling; boundary joins and intentional blank paragraphs; StylesPart contents; and OpenXmlValidator output.
+
+Artificial byte arrays are used for EXIF images. No local book images or OCR body text are test fixtures.
+
+Manual acceptance additionally checks the fixed-size WPF layout, candidate rectangles over a real imported page, page navigation from the diff window, cancellation after at least one completed OCR page, opening an existing project database, and generated DOCX appearance in Word or a compatible renderer.
 `scripts/test.ps1` runs C# unit tests and Python protocol tests. `scripts/build.ps1` builds the solution; `scripts/package.ps1` runs tests then publishes self-contained win-x64 output.

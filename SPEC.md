@@ -31,3 +31,25 @@ TateScribe is an offline Windows application that converts a user-selected seque
 - OCR worker failures are visible and retryable; cancellation leaves persisted completed work intact.
 - Unit tests cover ordering, normalized coordinate conversion, vertical ordering, direct joining, paragraph heuristics, document styles/ruby XML, retained manual edits, persistence, and worker failure handling.
 - A self-contained win-x64 package and setup/build/test/package scripts are produced. Dependency and model versions are recorded in `THIRD_PARTY.md`.
+
+## Proofreading package version 2
+
+- Export text priority is the active Confirmed value, Manual, Suggested, then reconstructed RawPaddle. A Manual save newer than the latest Confirmed version makes that older confirmation historical rather than active.
+- `manifest.json` records `textSource` and the baseline text hash for every page.
+- Only text between one `TEXT_BEGIN` / `TEXT_END` pair per PAGE is imported.
+- Reports are enclosed by `REPORT_BEGIN` / `REPORT_END` and are never imported as page text.
+- Missing, duplicate, nested, or out-of-block structural markers are rejected.
+- A single Markdown fence around the complete document is accepted without stripping ordinary `[[...]]` body text.
+- Version 1 remains import-compatible; all new exports use version 2.
+- Leading full-width/half-width spaces and internal/trailing paragraph boundaries are preserved.
+- Every format 2 page requires one `JOIN_TO_NEXT` after `TEXT_END`; it supports DirectJoin, SpaceJoin, ParagraphBreak, SceneBreak, and Uncertain.
+
+## State, history, and stale imports
+
+OCR execution state is stored independently from proofreading state. Re-OCR retains ManualText and ConfirmedText and marks previously proofread content Stale. Cancellation restores the page's pre-run OCR state. Manual and Confirmed saves append typed versions with timestamps and sources, suppressing consecutive identical versions.
+
+Export snapshots contain image hash, baseline text hash/source, crop, rotation, PageRole, DisplayProfile, sort order, and OCR run. Image changes and missing/excluded pages are blocking errors. Baseline/OCR/order/crop/rotation/role/profile changes are page warnings requiring explicit acceptance.
+
+## Page review and DOCX
+
+FixedPageVertical printed numbers are validated for duplicates, reversal, gaps, and nonnumeric values whenever project/page metadata changes. RubyCandidate role and draft inclusion are user-editable and persist across matching re-OCR words. Illustration and Blank are excluded from DOCX; text-bearing Other pages are included after confirmation. Required DOCX styles are Normal, Heading1/2/3, SectionNumber, and SceneBreak.

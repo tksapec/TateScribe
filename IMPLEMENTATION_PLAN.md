@@ -35,6 +35,17 @@
 
 ## Phase 6 — Manual proofreading exchange
 
+## Phase 7 — Hardened proofreading and document export
+
+- [x] Select Confirmed/Manual/Suggested/RawPaddle text and emit formatVersion 2.
+- [x] Strictly isolate page text and report blocks while retaining version 1 import.
+- [x] Persist export snapshots, stale warnings, independent OCR state, and text history.
+- [x] Add page-level before/after diff and accepted-page counting.
+- [x] Cache PaddleOCR in a persistent worker and retain structured page failures.
+- [x] Read EXIF timestamps and persist printed-page validation ReviewItems.
+- [x] Allow RubyCandidate role/inclusion overrides and show coordinate boxes.
+- [x] Include text-bearing Other pages and define/validate DOCX styles.
+- [x] Extract OCR, package, import, document, and page-validation services.
 1. Persist non-destructive Paddle/Tesseract runs, merge proposals, user edits, confirmed text, profile/role metadata, and status with idempotent SQLite migration.
 2. Export versioned proofreading ZIP/folder batches with stable page markers, source hashes, original/cropped images, review items, and offline instructions; import only matching batches after validation and explicit confirmation.
 3. Resolve confirmed text into structured DOCX paragraphs without screenshot-boundary breaks; preserve chapter/section markers and allow an optional page break before chapters.

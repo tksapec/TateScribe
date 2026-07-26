@@ -6,6 +6,15 @@ public enum ProofreadingPackageFormat
     Directory
 }
 
+public enum BoundaryJoinType
+{
+    DirectJoin,
+    SpaceJoin,
+    ParagraphBreak,
+    SceneBreak,
+    Uncertain
+}
+
 public sealed record ProofreadingReviewItem(string Code, string Message, string Text);
 
 public sealed record ProofreadingPackagePage(
@@ -20,7 +29,17 @@ public sealed record ProofreadingPackagePage(
     int LowConfidenceCount,
     string PageRole,
     string DisplayProfile,
-    IReadOnlyList<ProofreadingReviewItem>? ReviewItems = null);
+    IReadOnlyList<ProofreadingReviewItem>? ReviewItems = null,
+    string? ManualText = null,
+    string? ConfirmedText = null,
+    BoundaryJoinType JoinToNext = BoundaryJoinType.DirectJoin)
+{
+    public (string Text, string Source) SelectText() =>
+        ConfirmedText is not null ? (ConfirmedText, "Confirmed")
+        : ManualText is not null ? (ManualText, "Manual")
+        : SuggestedText is not null ? (SuggestedText, "Suggested")
+        : (MachineText, "RawPaddle");
+}
 
 public sealed record ProofreadingPackageRequest(
     Guid ProjectId,
@@ -30,17 +49,27 @@ public sealed record ProofreadingPackageRequest(
     ProofreadingPackageFormat Format,
     IReadOnlyList<ProofreadingPackagePage> Pages);
 
-public sealed record ProofreadingImportPage(string PageMarker, string ConfirmedText);
+public sealed record ProofreadingImportPage(
+    string PageMarker,
+    string ConfirmedText,
+    BoundaryJoinType JoinToNext = BoundaryJoinType.DirectJoin);
 
 public sealed record ProofreadingImportDocument(
     int FormatVersion,
     Guid ProjectId,
     Guid BatchId,
-    IReadOnlyList<ProofreadingImportPage> Pages);
+    IReadOnlyList<ProofreadingImportPage> Pages,
+    string Report = "");
 
 public sealed record ProofreadingImportIssue(string Code, string Message, string? PageMarker, bool IsError);
 
-public sealed record ProofreadingImportCandidate(Guid PageId, string PageMarker, string ConfirmedText);
+public sealed record ProofreadingImportCandidate(
+    Guid PageId,
+    string PageMarker,
+    string ConfirmedText,
+    string BaselineText = "",
+    ProofreadingDiffResult? Diff = null,
+    BoundaryJoinType JoinToNext = BoundaryJoinType.DirectJoin);
 
 public sealed record ProofreadingImportPreview(
     ProofreadingImportDocument Document,

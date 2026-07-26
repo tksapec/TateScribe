@@ -17,7 +17,8 @@ public sealed class ProofreadingPackageExporter
         if (File.Exists(request.DestinationPath) || Directory.Exists(request.DestinationPath))
             throw new IOException($"The proofreading package destination already exists: {request.DestinationPath}");
 
-        var parent = Path.GetDirectoryName(Path.GetFullPath(request.DestinationPath)) ?? throw new InvalidOperationException("Package destination has no parent directory.");
+        var parent = Path.GetDirectoryName(Path.GetFullPath(request.DestinationPath))
+            ?? throw new InvalidOperationException("Package destination has no parent directory.");
         Directory.CreateDirectory(parent);
         var staging = Path.Combine(parent, $".tatescribe-proofreading-{Guid.NewGuid():N}");
         try
@@ -25,9 +26,7 @@ public sealed class ProofreadingPackageExporter
             Directory.CreateDirectory(staging);
             await WritePackageAsync(staging, request, cancellationToken);
             if (request.Format == ProofreadingPackageFormat.Zip)
-            {
                 ZipFile.CreateFromDirectory(staging, request.DestinationPath, CompressionLevel.Optimal, includeBaseDirectory: false);
-            }
             else
             {
                 Directory.Move(staging, request.DestinationPath);
@@ -64,56 +63,67 @@ public sealed class ProofreadingPackageExporter
                 croppedRelativePath = $"images-cropped/PAGE-{marker}.png";
                 File.Copy(page.CroppedImagePath, Path.Combine(root, croppedRelativePath.Replace('/', Path.DirectorySeparatorChar)), overwrite: false);
             }
-            manifestPages.Add(new ManifestPage(marker, page.ProjectPageId, page.SortOrder, page.SourceFileName, page.SourceFileHash,
+
+            var selected = page.SelectText();
+            manifestPages.Add(new ManifestPage(
+                marker, page.ProjectPageId, page.SortOrder, page.SourceFileName, page.SourceFileHash,
                 originalRelativePath, croppedRelativePath, page.DisplayProfile, page.PageRole,
-                HashText(page.MachineText), page.SuggestedText is null ? null : HashText(page.SuggestedText), page.LowConfidenceCount));
+                HashText(page.MachineText), page.SuggestedText is null ? null : HashText(page.SuggestedText),
+                HashText(selected.Text), selected.Source, page.JoinToNext.ToString(), page.LowConfidenceCount));
         }
 
-        var manifest = new Manifest(1, request.ProjectId, request.ProjectName, DateTimeOffset.UtcNow, request.BatchId, request.Pages.Count, manifestPages);
-        await File.WriteAllTextAsync(Path.Combine(root, "manifest.json"), JsonSerializer.Serialize(manifest, JsonOptions), new UTF8Encoding(false), cancellationToken);
-        await File.WriteAllTextAsync(Path.Combine(root, "ocr.txt"), CreateOcrText(request, manifestPages), new UTF8Encoding(false), cancellationToken);
-        await File.WriteAllTextAsync(Path.Combine(root, "instructions.md"), Instructions, new UTF8Encoding(false), cancellationToken);
+        var manifest = new Manifest(2, request.ProjectId, request.ProjectName, DateTimeOffset.UtcNow,
+            request.BatchId, request.Pages.Count, manifestPages);
+        await File.WriteAllTextAsync(Path.Combine(root, "manifest.json"),
+            JsonSerializer.Serialize(manifest, JsonOptions), new UTF8Encoding(false), cancellationToken);
+        await File.WriteAllTextAsync(Path.Combine(root, "ocr.txt"),
+            CreateOcrText(request, manifestPages), new UTF8Encoding(false), cancellationToken);
+        await File.WriteAllTextAsync(Path.Combine(root, "instructions.md"),
+            Instructions, new UTF8Encoding(false), cancellationToken);
         var reviewItems = request.Pages.SelectMany((page, index) => (page.ReviewItems ?? [])
             .Select(item => new { pageMarker = manifestPages[index].PageMarker, item.Code, item.Message, item.Text })).ToArray();
-        await File.WriteAllTextAsync(Path.Combine(root, "review-items.json"), JsonSerializer.Serialize(reviewItems, JsonOptions), new UTF8Encoding(false), cancellationToken);
+        await File.WriteAllTextAsync(Path.Combine(root, "review-items.json"),
+            JsonSerializer.Serialize(reviewItems, JsonOptions), new UTF8Encoding(false), cancellationToken);
     }
 
     private static string CreateOcrText(ProofreadingPackageRequest request, IReadOnlyList<ManifestPage> manifestPages)
     {
         var builder = new StringBuilder();
-        builder.AppendLine("[[TATESCRIBE_FORMAT:1]]");
+        builder.AppendLine("[[TATESCRIBE_FORMAT:2]]");
         builder.AppendLine($"[[PROJECT_ID:{request.ProjectId:D}]]");
         builder.AppendLine($"[[BATCH_ID:{request.BatchId:D}]]");
         builder.AppendLine();
         for (var index = 0; index < request.Pages.Count; index++)
         {
             var page = request.Pages[index];
-            var manifest = manifestPages[index];
-            builder.AppendLine($"[[PAGE:{manifest.PageMarker}]]");
-            builder.AppendLine($"[[SOURCE_FILE:{page.SourceFileName}]]");
-            builder.AppendLine($"[[PAGE_ROLE:{page.PageRole}]]");
-            builder.AppendLine($"[[DISPLAY_PROFILE:{page.DisplayProfile}]]");
+            var selected = page.SelectText();
+            builder.AppendLine($"[[PAGE:{manifestPages[index].PageMarker}]]");
+            builder.AppendLine("[[TEXT_BEGIN]]");
+            builder.Append(selected.Text);
+            if (!selected.Text.EndsWith('\n')) builder.AppendLine();
+            builder.AppendLine("[[TEXT_END]]");
+            builder.AppendLine($"[[JOIN_TO_NEXT:{page.JoinToNext}]]");
             builder.AppendLine();
-            builder.AppendLine(page.SuggestedText ?? page.MachineText);
-            if (index + 1 < request.Pages.Count) builder.AppendLine();
         }
+        builder.AppendLine("[[REPORT_BEGIN]]");
+        builder.AppendLine("[[REPORT_END]]");
         return builder.ToString();
     }
 
-    private static string HashText(string text) => Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(text)));
+    private static string HashText(string text) =>
+        Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(text)));
 
     private const string Instructions = """
         # TateScribe 校正指示
 
-        添付画像を正本としてOCR結果を校正してください。OCR本文だけから推測せず、原文にない文字や表現を追加したり、読みやすく書き換えたりしないでください。
+        添付画像を正本として OCR 本文を校正してください。誤記や欠落を適切に修正し、判断に悩む場合はユーザーへ確認してください。
 
-        - 縦書きは右列から左列へ読み、列替わり・ページ切替わりだけの改行は本文に残さない。
-        - 原文の段落、会話文、鉤括弧、句読点を保持し、ルビを本文へ重複して入れない。
-        - ステータスバー、進捗率、ページ番号、柱見出し、写真、挿絵、画像内文字、キャプションは出力しない。
-        - 章冒頭の章番号・章タイトルと本文途中の節番号は残す。
-        - 判読不能箇所は［判読不能: PAGE-xxxx］とし、[[PAGE:xxxx]]を含む管理マーカーは削除しない。
-
-        校正済み本文、判読不能箇所一覧、主な修正箇所一覧を返してください。
+        - 各ページの校正済み本文は `[[TEXT_BEGIN]]` と `[[TEXT_END]]` の間だけに記入してください。
+        - `[[PAGE:xxxx]]`、`[[JOIN_TO_NEXT:...]]`、プロジェクト ID、バッチ ID は変更しないでください。
+        - ページ本文中の全角空白、半角空白、空行、章・節マーカーを保持してください。
+        - 判読不能箇所一覧と主な修正箇所一覧は `[[REPORT_BEGIN]]` と `[[REPORT_END]]` の間へ記入してください。
+        - 報告をページ本文の `TEXT_BEGIN` / `TEXT_END` 内へ書かないでください。
+        - ステータスバー、通知、ページ番号、写真、挿絵、画像内キャプションは本文へ追加しないでください。
         """;
 
     private sealed record Manifest(
@@ -137,5 +147,8 @@ public sealed class ProofreadingPackageExporter
         string PageRole,
         string MachineTextHash,
         string? SuggestedTextHash,
+        string BaselineTextHash,
+        string TextSource,
+        string JoinToNext,
         int LowConfidenceCount);
 }

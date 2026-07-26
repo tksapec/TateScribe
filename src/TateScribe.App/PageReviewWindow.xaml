@@ -1,0 +1,70 @@
+<Window x:Class="TateScribe.App.PageReviewWindow"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        Title="本文履歴・ルビ候補" Width="960" Height="640" MinWidth="720" MinHeight="420">
+  <Grid Margin="12">
+    <Grid.RowDefinitions>
+      <RowDefinition Height="*" />
+      <RowDefinition Height="Auto" />
+    </Grid.RowDefinitions>
+    <TabControl>
+      <TabItem Header="本文履歴">
+        <Grid Margin="8">
+          <Grid.RowDefinitions>
+            <RowDefinition Height="*" />
+            <RowDefinition Height="Auto" />
+          </Grid.RowDefinitions>
+          <DataGrid x:Name="HistoryGrid" AutoGenerateColumns="False" IsReadOnly="True" CanUserAddRows="False">
+            <DataGrid.Columns>
+              <DataGridTextColumn Header="種別" Binding="{Binding Kind}" Width="90" />
+              <DataGridTextColumn Header="保存日時" Binding="{Binding CreatedAt}" Width="170" />
+              <DataGridTextColumn Header="保存元" Binding="{Binding Source}" Width="120" />
+              <DataGridTextColumn Header="本文" Binding="{Binding Text}" Width="*" />
+            </DataGrid.Columns>
+          </DataGrid>
+          <Button Grid.Row="1" Margin="0,8,0,0" HorizontalAlignment="Right" Padding="12,6"
+                  Click="RestoreSelectedVersion">選択した版を復元</Button>
+        </Grid>
+      </TabItem>
+      <TabItem Header="ルビ候補">
+        <Grid Margin="8">
+          <Grid.ColumnDefinitions>
+            <ColumnDefinition Width="*" />
+            <ColumnDefinition Width="12" />
+            <ColumnDefinition Width="*" />
+          </Grid.ColumnDefinitions>
+          <DataGrid x:Name="RubyGrid" AutoGenerateColumns="False" CanUserAddRows="False">
+            <DataGrid.Columns>
+              <DataGridTextColumn Header="文字" Binding="{Binding Text}" Width="*" IsReadOnly="True" />
+              <DataGridTextColumn Header="分類" Binding="{Binding Role}" Width="120" />
+              <DataGridCheckBoxColumn Header="下書きに含める" Binding="{Binding IncludedInDraft}" Width="110" />
+              <DataGridTextColumn Header="座標" Binding="{Binding Coordinates}" Width="150" IsReadOnly="True" />
+            </DataGrid.Columns>
+          </DataGrid>
+          <ScrollViewer Grid.Column="2" HorizontalScrollBarVisibility="Auto" VerticalScrollBarVisibility="Auto">
+            <Grid HorizontalAlignment="Left" VerticalAlignment="Top">
+              <Image x:Name="RubyPreview" Stretch="None" SizeChanged="RubyPreviewSizeChanged" />
+              <Canvas x:Name="RubyOverlay" IsHitTestVisible="False" />
+            </Grid>
+          </ScrollViewer>
+        </Grid>
+      </TabItem>
+      <TabItem Header="OCR失敗履歴">
+        <DataGrid x:Name="OcrFailureGrid" Margin="8" AutoGenerateColumns="False" IsReadOnly="True" CanUserAddRows="False">
+          <DataGrid.Columns>
+            <DataGridTextColumn Header="発生日時" Binding="{Binding OccurredAt}" Width="170" />
+            <DataGridTextColumn Header="段階" Binding="{Binding Stage}" Width="100" />
+            <DataGridTextColumn Header="例外型" Binding="{Binding ExceptionType}" Width="160" />
+            <DataGridTextColumn Header="理由" Binding="{Binding Message}" Width="*" />
+            <DataGridCheckBoxColumn Header="再試行可" Binding="{Binding Retryable}" Width="80" />
+            <DataGridCheckBoxColumn Header="取消" Binding="{Binding WasCancelled}" Width="60" />
+          </DataGrid.Columns>
+        </DataGrid>
+      </TabItem>
+    </TabControl>
+    <StackPanel Grid.Row="1" Orientation="Horizontal" HorizontalAlignment="Right" Margin="0,10,0,0">
+      <Button Padding="12,6" Margin="0,0,8,0" Click="SaveRubyReview">ルビ分類を保存</Button>
+      <Button Padding="12,6" Click="CloseWindow">閉じる</Button>
+    </StackPanel>
+  </Grid>
+</Window>

@@ -1,6 +1,9 @@
 using TateScribe.Core.Ocr;
+using TateScribe.Core.Layout;
 
 namespace TateScribe.Core.Projects;
+
+public sealed record PageTextSelection(string Text, string Source);
 
 public sealed record PageTextState(
     Guid PageId,
@@ -18,5 +21,14 @@ public sealed record PageTextState(
 {
     public IReadOnlyList<OcrWord> RawPaddleWords => MachineWords;
 
-    public string SelectedText => ConfirmedText ?? ManualText ?? SuggestedText ?? string.Empty;
+    public string SelectedText => SelectForProofreading().Text;
+
+    public PageTextSelection SelectForProofreading()
+    {
+        if (ConfirmedText is not null) return new PageTextSelection(ConfirmedText, "Confirmed");
+        if (ManualText is not null) return new PageTextSelection(ManualText, "Manual");
+        if (SuggestedText is not null) return new PageTextSelection(SuggestedText, "Suggested");
+        var reconstructed = VerticalTextReconstruction.Reconstruct(RawPaddleWords, 20, .75).Text;
+        return new PageTextSelection(reconstructed, "RawPaddle");
+    }
 }

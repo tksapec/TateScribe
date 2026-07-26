@@ -1,4 +1,5 @@
 using TateScribe.Core.Export;
+using TateScribe.Core.Proofreading;
 
 namespace TateScribe.Tests;
 
@@ -22,6 +23,17 @@ public sealed class BookDocumentAssemblerTests
         Assert.Collection(document.Paragraphs,
             paragraph => Assert.Equal("甲", paragraph.Text),
             paragraph => Assert.Equal("乙丙", paragraph.Text));
+    }
+
+    [Fact]
+    public void Assemble_preserves_intentional_blank_paragraphs_inside_body_text()
+    {
+        var document = BookDocumentAssembler.Assemble(["第一段落\n\n第二段落"]);
+
+        Assert.Collection(document.Paragraphs,
+            paragraph => Assert.Equal("第一段落", paragraph.Text),
+            paragraph => Assert.Equal(string.Empty, paragraph.Text),
+            paragraph => Assert.Equal("第二段落", paragraph.Text));
     }
 
     [Fact]
@@ -61,5 +73,32 @@ public sealed class BookDocumentAssemblerTests
         Assert.Collection(document.Paragraphs,
             paragraph => Assert.Equal((ExportStyle.Heading1, DocumentElementRole.ChapterTitle, "Chapter title"), (paragraph.Style, paragraph.Role, paragraph.Text)),
             paragraph => Assert.Equal((ExportStyle.Normal, DocumentElementRole.BodyParagraph, "Chapter body"), (paragraph.Style, paragraph.Role, paragraph.Text)));
+    }
+
+    [Fact]
+    public void Assemble_applies_explicit_page_boundary_join_types_and_preserves_leading_spaces()
+    {
+        var document = BookDocumentAssembler.Assemble([
+            new ExportPageText("文の途中", BoundaryJoinType.DirectJoin),
+            new ExportPageText("です", BoundaryJoinType.ParagraphBreak),
+            new ExportPageText("　次の段落", BoundaryJoinType.SpaceJoin),
+            new ExportPageText("続き", BoundaryJoinType.DirectJoin)
+        ]);
+
+        Assert.Collection(document.Paragraphs,
+            paragraph => Assert.Equal("文の途中です", paragraph.Text),
+            paragraph => Assert.Equal("　次の段落 続き", paragraph.Text));
+    }
+
+    [Fact]
+    public void CreateChapterPageText_keeps_a_chapter_number_and_short_title_as_headings()
+    {
+        var text = BookDocumentAssembler.CreateChapterPageText("第一話\n居眠り八角\n　本文");
+        var document = BookDocumentAssembler.Assemble([text]);
+
+        Assert.Collection(document.Paragraphs,
+            paragraph => Assert.Equal((ExportStyle.Heading1, "第一話"), (paragraph.Style, paragraph.Text)),
+            paragraph => Assert.Equal((ExportStyle.Heading1, "居眠り八角"), (paragraph.Style, paragraph.Text)),
+            paragraph => Assert.Equal((ExportStyle.Normal, "　本文"), (paragraph.Style, paragraph.Text)));
     }
 }
