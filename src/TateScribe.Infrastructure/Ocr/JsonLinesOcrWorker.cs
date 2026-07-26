@@ -94,7 +94,11 @@ public sealed class JsonLinesOcrWorker(string pythonExecutable, string workerScr
         if (_process is null) return;
         try
         {
-            if (!_process.HasExited) _process.Kill(entireProcessTree: true);
+            if (!_process.HasExited)
+            {
+                _process.Kill(entireProcessTree: true);
+                _process.WaitForExit(5000);
+            }
         }
         finally
         {

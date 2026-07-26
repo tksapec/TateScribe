@@ -32,6 +32,22 @@ public sealed class DendenExportService : IDendenExportService
             await WriteAsync("ddconv.yml", BuildYaml(options));
             await WriteAsync("default.css", BuildCss(options.VerticalWriting));
             await WriteAsync("README.txt", Readme);
+            if (!string.IsNullOrWhiteSpace(options.CoverImagePath))
+                File.Copy(options.CoverImagePath, Path.Combine(destinationDirectory, "cover.jpg"));
+            if (options.IllustrationImagePaths is { Count: > 0 })
+            {
+                var imagesDirectory = Path.Combine(destinationDirectory, "images");
+                Directory.CreateDirectory(imagesDirectory);
+                for (var index = 0; index < options.IllustrationImagePaths.Count; index++)
+                {
+                    var source = options.IllustrationImagePaths[index];
+                    var extension = Path.GetExtension(source).ToLowerInvariant();
+                    if (string.IsNullOrWhiteSpace(extension)) extension = ".png";
+                    File.Copy(
+                        source,
+                        Path.Combine(imagesDirectory, $"illustration-{index + 1:000}{extension}"));
+                }
+            }
             if (options.ApprovedGlobalRubies is { Count: > 0 })
                 await WriteAsync("ruby.csv", string.Join("\n", options.ApprovedGlobalRubies
                     .OrderBy(pair => pair.Key, StringComparer.Ordinal)

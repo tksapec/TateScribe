@@ -147,6 +147,42 @@ public sealed class RubyPackageAndExportTests : IDisposable
     }
 
     [Fact]
+    public async Task Denden_copies_only_explicit_cover_and_illustration_inputs_with_stable_names()
+    {
+        Directory.CreateDirectory(tempPath);
+        var cover = Path.Combine(tempPath, "selected-cover.jpeg");
+        var firstIllustration = Path.Combine(tempPath, "scene-b.png");
+        var secondIllustration = Path.Combine(tempPath, "scene-a.jpg");
+        await File.WriteAllBytesAsync(cover, [1, 2, 3]);
+        await File.WriteAllBytesAsync(firstIllustration, [4, 5]);
+        await File.WriteAllBytesAsync(secondIllustration, [6, 7]);
+        var destination = Path.Combine(tempPath, "with-images");
+
+        await new DendenExportService().ExportAsync(
+            CreateDocument(),
+            new DendenExportOptions(
+                "書名",
+                "著者",
+                CoverImagePath: cover,
+                IllustrationImagePaths: [firstIllustration, secondIllustration]),
+            destination,
+            CancellationToken.None);
+
+        Assert.Equal(
+            new byte[] { 1, 2, 3 },
+            await File.ReadAllBytesAsync(Path.Combine(destination, "cover.jpg")));
+        Assert.Equal(
+            new byte[] { 4, 5 },
+            await File.ReadAllBytesAsync(Path.Combine(
+                destination, "images", "illustration-001.png")));
+        Assert.Equal(
+            new byte[] { 6, 7 },
+            await File.ReadAllBytesAsync(Path.Combine(
+                destination, "images", "illustration-002.jpg")));
+        Assert.Equal(2, Directory.GetFiles(Path.Combine(destination, "images")).Length);
+    }
+
+    [Fact]
     public async Task Denden_maps_roles_splits_chapters_and_keeps_different_readings_inline()
     {
         Directory.CreateDirectory(tempPath);

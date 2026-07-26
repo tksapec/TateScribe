@@ -13,7 +13,9 @@ public sealed record DendenExportOptions(
     bool AutoTcy = true,
     int TcyDigitCount = 2,
     bool SplitByChapter = false,
-    IReadOnlyDictionary<string, string>? ApprovedGlobalRubies = null);
+    IReadOnlyDictionary<string, string>? ApprovedGlobalRubies = null,
+    string? CoverImagePath = null,
+    IReadOnlyList<string>? IllustrationImagePaths = null);
 
 public interface IDendenExportService
 {

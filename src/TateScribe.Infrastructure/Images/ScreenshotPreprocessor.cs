@@ -12,7 +12,8 @@ public sealed class ScreenshotPreprocessor
         crop.Validate();
         if (rotationDegrees is not (0 or 90 or 180 or 270)) throw new ArgumentOutOfRangeException(nameof(rotationDegrees));
         Directory.CreateDirectory(cacheDirectory);
-        var sourceHash = Convert.ToHexString(await SHA256.HashDataAsync(File.OpenRead(sourcePath), cancellationToken));
+        await using var sourceStream = File.OpenRead(sourcePath);
+        var sourceHash = Convert.ToHexString(await SHA256.HashDataAsync(sourceStream, cancellationToken));
         var cacheKey = Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes($"{sourceHash}|{crop.Left:R}|{crop.Top:R}|{crop.Right:R}|{crop.Bottom:R}|{rotationDegrees}")));
         var cachePath = Path.Combine(cacheDirectory, $"{cacheKey}.png");
         if (File.Exists(cachePath))

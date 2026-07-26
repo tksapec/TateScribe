@@ -560,10 +560,17 @@ public partial class MainWindow : Window
             IsEnabled = false;
             var preparation = await new DocumentExportService().PrepareStructuredAsync(
                 _projectDirectory, _pages, false, CancellationToken.None);
+            var options = settings.Options with
+            {
+                CoverImagePath = settings.CoverPath,
+                IllustrationImagePaths = _pages
+                    .Where(page => page.IsIncluded && page.PageRole == PageRole.Illustration)
+                    .OrderBy(page => page.SortOrder)
+                    .Select(page => page.SourcePath)
+                    .ToArray(),
+            };
             await new DendenExportService().ExportAsync(
-                preparation.Document, settings.Options, destination, CancellationToken.None);
-            if (settings.CoverPath is not null)
-                File.Copy(settings.CoverPath, Path.Combine(destination, "cover.jpg"), overwrite: false);
+                preparation.Document, options, destination, CancellationToken.None);
             MessageBox.Show(this,
                 $"でんでんコンバーター用データを出力しました。EPUB・ZIPは作成していません。{Environment.NewLine}{destination}",
                 "TateScribe", MessageBoxButton.OK, MessageBoxImage.Information);
