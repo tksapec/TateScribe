@@ -11,6 +11,8 @@ OCR ruby candidates, ChatGPT proposals, and user-confirmed ruby are separate con
 ## Consequences
 
 - Publication output is repeatable and testable.
+- Preparing DOCX/Denden is read-only; the snapshot is persisted only after confirmation and successful artifact output.
+- Ruby output and preflight select one effective annotation per paragraph/range. Different readings are a review conflict, never an implicit latest-wins choice.
 - ChatGPT cannot silently rewrite body text while adding ruby.
 - Package/batch/document/paragraph hashes and UTF-16 ranges must be validated.
 - Body edits invalidate affected ruby instead of using ambiguous text search.

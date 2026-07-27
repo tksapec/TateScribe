@@ -17,13 +17,13 @@ public sealed record DocumentExportPreparation(
 
 public sealed record StructuredDocumentPreparation(
     StructuredDocument Document,
-    Guid SnapshotId,
+    Guid? ExistingSnapshotId,
     DocumentExportPreparation LegacyPreparation,
     ExportPreflightResult Preflight);
 
 public sealed record DendenDocumentPreparation(
     DendenExportDocument Document,
-    Guid SnapshotId,
+    Guid? ExistingSnapshotId,
     DocumentExportPreparation LegacyPreparation,
     ExportPreflightResult Preflight);
 
@@ -56,7 +56,7 @@ public sealed class DocumentExportService
             illustrations);
         return new DendenDocumentPreparation(
             dendenDocument,
-            structured.SnapshotId,
+            structured.ExistingSnapshotId,
             structured.LegacyPreparation,
             structured.Preflight with
             {
@@ -130,8 +130,10 @@ public sealed class DocumentExportService
         }
         var draft = new StructuredDocument(projectId, paragraphs, string.Empty);
         var document = draft with { DocumentTextHash = DocumentTextHash.Compute(draft) };
-        var snapshotId = await repository.SaveDocumentSnapshotAsync(document, "SelectedConfirmedText", cancellationToken);
-        var withConfirmedRuby = await repository.LoadStructuredDocumentAsync(projectId, snapshotId, cancellationToken);
+        var snapshotId = await repository.FindDocumentSnapshotAsync(projectId, document.DocumentTextHash, cancellationToken);
+        var withConfirmedRuby = snapshotId is { } existingSnapshotId
+            ? await repository.LoadStructuredDocumentAsync(projectId, existingSnapshotId, cancellationToken)
+            : document;
         var preflight = await BuildPreflightAsync(
             repository,
             snapshotId,
@@ -142,6 +144,15 @@ public sealed class DocumentExportService
             snapshotId,
             legacy,
             preflight);
+    }
+
+    public async Task<Guid> PersistAfterSuccessfulOutputAsync(
+        string projectDirectory,
+        StructuredDocument document,
+        CancellationToken cancellationToken)
+    {
+        await using var repository = await SqliteProjectRepository.CreateAsync(projectDirectory, cancellationToken);
+        return await repository.SaveDocumentSnapshotAsync(document, "SelectedConfirmedText", cancellationToken);
     }
 
     public async Task<DocumentExportPreparation> PrepareAsync(
@@ -179,13 +190,13 @@ public sealed class DocumentExportService
 
     private static async Task<ExportPreflightResult> BuildPreflightAsync(
         SqliteProjectRepository repository,
-        Guid snapshotId,
+        Guid? snapshotId,
         DocumentExportPreparation legacy,
         CancellationToken cancellationToken)
     {
-        var rubyCounts = await repository.GetRubyPreflightCountsAsync(
-            snapshotId,
-            cancellationToken);
+        var rubyCounts = snapshotId is { } id
+            ? await repository.GetRubyPreflightCountsAsync(id, cancellationToken)
+            : new RubyPreflightCounts(0, 0, 0, 0, []);
         return new ExportPreflightResult(
             legacy.IncludedPageCount,
             legacy.UnproofreadPageCount,
@@ -196,6 +207,7 @@ public sealed class DocumentExportService
             rubyCounts.Unresolved,
             rubyCounts.Stale,
             0,
-            []);
+            rubyCounts.Conflicts.Select(conflict => new ExportPreflightIssue(
+                "RubyConflict", $"Conflicting ruby readings require review ({conflict}).")).ToArray());
     }
 }

@@ -29,6 +29,13 @@ public enum RubyAnnotationStatus
     Stale,
 }
 
+public sealed record RubyPreflightCounts(
+    int Confirmed,
+    int Proposed,
+    int Stale,
+    int Unresolved,
+    IReadOnlyList<string> Conflicts);
+
 public sealed record SourceSpan(Guid PageId, string PageMarker, int Start, int Length);
 
 public abstract record InlineElement;

@@ -553,6 +553,8 @@ public partial class MainWindow : Window
             if (!ConfirmExport(preflight, "DOCX")) return;
             await new OpenXmlDocumentExporter().ExportAsync(preparation.Document, outputPath,
                 PageBreakBeforeChapters.IsChecked == true, "游明朝", CancellationToken.None);
+            await new DocumentExportService().PersistAfterSuccessfulOutputAsync(
+                _projectDirectory, preparation.Document, CancellationToken.None);
             var summary = preparation.LegacyPreparation.EmptyPageCount == 0
                 ? $"{preparation.LegacyPreparation.IncludedPageCount} ページを出力しました。"
                 : $"{preparation.LegacyPreparation.IncludedPageCount} ページを出力し、本文のない {preparation.LegacyPreparation.EmptyPageCount} ページを除外しました。";
@@ -613,6 +615,8 @@ public partial class MainWindow : Window
             };
             if (!ConfirmExport(preflight, "でんでん用データ")) return;
             await exporter.ExportAsync(dendenPlan, destination, CancellationToken.None);
+            await new DocumentExportService().PersistAfterSuccessfulOutputAsync(
+                _projectDirectory, preparation.Document.Document, CancellationToken.None);
             MessageBox.Show(this,
                 $"でんでんコンバーター用データを出力しました。EPUB・ZIPは作成していません。{Environment.NewLine}{destination}",
                 "TateScribe", MessageBoxButton.OK, MessageBoxImage.Information);

@@ -20,3 +20,5 @@
 - Hardened ImageConfirmed against paragraph source spans and OCR reading/parent/side evidence with centralized 0.70 annotation, 0.70 OCR, and 0.60 link thresholds.
 - Revalidated edited and freshly identified ruby imports so candidate warnings bind by AnnotationId, block save on errors, and require acknowledgement for newly warned Confirmed items.
 - Added read-only ruby batch history with latest-annotated initial selection, status/unresolved counts, historical batch opening, and current-document staleness.
+- Kept DOCX and Denden preparation read-only until confirmation and successful artifact output; snapshot deduplication now occurs only after output succeeds.
+- Made ruby preflight and DOCX composition use one effective annotation per paragraph/range, deduplicate repeated unresolved items, and surface conflicting readings instead of silently choosing one.

@@ -33,6 +33,8 @@ public sealed class RubyWorkflowService
     {
         var preparation = await new DocumentExportService().PrepareStructuredAsync(
             projectDirectory, pages, false, cancellationToken);
+        var snapshotId = await new DocumentExportService().PersistAfterSuccessfulOutputAsync(
+            projectDirectory, preparation.Document, cancellationToken);
         await using var repository = await SqliteProjectRepository.CreateAsync(projectDirectory, cancellationToken);
         var cacheDirectory = Path.Combine(projectDirectory, ".tatescribe-cache");
         var preprocessor = new ScreenshotPreprocessor();
@@ -60,8 +62,8 @@ public sealed class RubyWorkflowService
             preparation.Document.ProjectId, batchId, policy, preparation.Document,
             packagePages, candidates, destination), cancellationToken);
         await repository.RecordRubyBatchAsync(batchId, preparation.Document.ProjectId,
-            preparation.SnapshotId, policy, packagePages, candidates, cancellationToken);
-        return new RubyPackageExportResult(batchId, preparation.SnapshotId, preparation.Document,
+            snapshotId, policy, packagePages, candidates, cancellationToken);
+        return new RubyPackageExportResult(batchId, snapshotId, preparation.Document,
             preparation.LegacyPreparation.UnproofreadPageCount);
     }
 

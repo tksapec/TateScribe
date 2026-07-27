@@ -6,6 +6,8 @@
 
 ## Data flow
 
+`DocumentExportService` builds an immutable structured document and preflight without writing SQLite. It may reuse an identical existing snapshot to compose confirmed ruby. The UI persists the snapshot only after its exporter has completed. Repository ruby aggregation groups annotations and unresolved items by logical paragraph/range; different readings are conflicts and are excluded from composed DOCX ruby.
+
 1. Import computes immutable source metadata and creates `Page` records in `project.db`.
 2. Preprocessing writes a cache key derived from source hash plus crop/rotation/profile. It produces normalized regions only; the source remains untouched.
 3. `JsonLinesOcrWorker` starts one child process, sends a request containing image path, cached image path, engine id and settings, and receives typed word/region records. Stderr is captured as diagnostic data, never parsed as protocol.

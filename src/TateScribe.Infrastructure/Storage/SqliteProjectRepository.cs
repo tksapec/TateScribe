@@ -428,6 +428,23 @@ public sealed class SqliteProjectRepository : IAsyncDisposable
         return snapshotId;
     }
 
+    public async Task<Guid?> FindDocumentSnapshotAsync(
+        Guid projectId,
+        string documentTextHash,
+        CancellationToken cancellationToken)
+    {
+        var command = _connection.CreateCommand();
+        command.CommandText = """
+            SELECT id FROM document_snapshots
+            WHERE project_id = $projectId AND document_text_hash = $hash
+            ORDER BY created_utc DESC, rowid DESC LIMIT 1;
+            """;
+        command.Parameters.AddWithValue("$projectId", projectId.ToString("D"));
+        command.Parameters.AddWithValue("$hash", documentTextHash);
+        return Guid.TryParse(await command.ExecuteScalarAsync(cancellationToken) as string, out var id)
+            ? id : null;
+    }
+
     public async Task<Guid?> FindStableParagraphIdAsync(
         Guid projectId,
         string logicalKey,
@@ -803,27 +820,33 @@ public sealed class SqliteProjectRepository : IAsyncDisposable
             var annotationCommand = _connection.CreateCommand();
             annotationCommand.CommandText = """
                 SELECT a.id, a.start_offset, a.length, a.base_text, a.reading, a.source,
-                       a.confidence, a.evidence, a.updated_utc
+                       a.confidence, a.evidence, a.updated_utc, a.status, b.exported_utc
                 FROM ruby_annotations a
                 JOIN ruby_batches b ON b.id = a.batch_id
                 WHERE b.document_snapshot_id = $snapshotId
-                  AND a.paragraph_id = $paragraphId AND a.status = 'Confirmed'
+                  AND a.paragraph_id = $paragraphId
                 ORDER BY a.updated_utc DESC;
                 """;
             annotationCommand.Parameters.AddWithValue("$snapshotId", snapshotId.ToString("D"));
             annotationCommand.Parameters.AddWithValue("$paragraphId", row.Id.ToString("D"));
-            var annotations = new List<RubyAnnotationProposal>();
+            var annotations = new List<(RubyAnnotationProposal Proposal, DateTimeOffset Updated, DateTimeOffset Exported)>();
             await using (var annotationReader = await annotationCommand.ExecuteReaderAsync(cancellationToken))
                 while (await annotationReader.ReadAsync(cancellationToken))
-                    annotations.Add(new RubyAnnotationProposal(
+                    annotations.Add((new RubyAnnotationProposal(
                         row.Id.ToString("D"), annotationReader.GetInt32(1), annotationReader.GetInt32(2),
                         annotationReader.GetString(3), annotationReader.GetString(4),
                         Enum.Parse<RubySource>(annotationReader.GetString(5)), annotationReader.GetDouble(6),
                         [], annotationReader.GetString(7), Guid.Parse(annotationReader.GetString(0)),
-                        RubyAnnotationStatus.Confirmed));
-            var latest = annotations
-                .GroupBy(item => (item.Start, item.Length))
-                .Select(group => group.First());
+                        Enum.Parse<RubyAnnotationStatus>(annotationReader.GetString(9))),
+                    DateTimeOffset.Parse(annotationReader.GetString(8), CultureInfo.InvariantCulture),
+                    DateTimeOffset.Parse(annotationReader.GetString(10), CultureInfo.InvariantCulture)));
+            var latest = SelectEffectiveRuby(annotations.Select(item => (
+                    row.Id.ToString("D"), item.Proposal.Start, item.Proposal.Length, item.Proposal.Reading,
+                    item.Proposal.Status, item.Updated, item.Exported, item.Proposal.AnnotationId.ToString("D"))))
+                .Items.Where(item => item.Status == RubyAnnotationStatus.Confirmed)
+                .Select(item => new RubyAnnotationProposal(row.Id.ToString("D"), item.Start, item.Length,
+                    row.Text.Substring(item.Start, item.Length), item.Reading, RubySource.UserConfirmed,
+                    1, [], string.Empty, Guid.NewGuid(), RubyAnnotationStatus.Confirmed));
             paragraphs.Add(RubyDocumentComposer.Apply(paragraph, latest));
         }
         return new StructuredDocument(projectId, paragraphs, documentHash);
@@ -982,52 +1005,63 @@ public sealed class SqliteProjectRepository : IAsyncDisposable
         return items;
     }
 
-    public async Task<(int Confirmed, int Proposed, int Stale, int Unresolved)>
+    public async Task<RubyPreflightCounts>
         GetRubyPreflightCountsAsync(
             Guid snapshotId,
             CancellationToken cancellationToken)
     {
-        var confirmed = 0;
-        var proposed = 0;
-        var stale = 0;
         var annotations = _connection.CreateCommand();
         annotations.CommandText = """
-            SELECT a.status, COUNT(*)
+            SELECT a.paragraph_id, a.start_offset, a.length, a.reading, a.status,
+                   a.updated_utc, b.exported_utc, a.id
             FROM ruby_annotations a
             JOIN ruby_batches b ON b.id = a.batch_id
-            WHERE b.document_snapshot_id = $snapshotId
-            GROUP BY a.status;
+            WHERE b.document_snapshot_id = $snapshotId;
             """;
         annotations.Parameters.AddWithValue("$snapshotId", snapshotId.ToString("D"));
+        var rows = new List<(string ParagraphId, int Start, int Length, string Reading, RubyAnnotationStatus Status, DateTimeOffset Updated, DateTimeOffset Exported, string Id)>();
         await using (var reader = await annotations.ExecuteReaderAsync(cancellationToken))
             while (await reader.ReadAsync(cancellationToken))
-            {
-                var count = reader.GetInt32(1);
-                switch (Enum.Parse<RubyAnnotationStatus>(reader.GetString(0)))
-                {
-                    case RubyAnnotationStatus.Confirmed:
-                        confirmed += count;
-                        break;
-                    case RubyAnnotationStatus.Proposed:
-                        proposed += count;
-                        break;
-                    case RubyAnnotationStatus.Stale:
-                        stale += count;
-                        break;
-                }
-            }
+                rows.Add((reader.GetString(0), reader.GetInt32(1), reader.GetInt32(2), reader.GetString(3),
+                    Enum.Parse<RubyAnnotationStatus>(reader.GetString(4)),
+                    DateTimeOffset.Parse(reader.GetString(5), CultureInfo.InvariantCulture),
+                    DateTimeOffset.Parse(reader.GetString(6), CultureInfo.InvariantCulture), reader.GetString(7)));
+        var effective = SelectEffectiveRuby(rows);
+        var confirmed = effective.Items.Count(item => item.Status == RubyAnnotationStatus.Confirmed);
+        var proposed = effective.Items.Count(item => item.Status == RubyAnnotationStatus.Proposed);
+        var stale = effective.Items.Count(item => item.Status == RubyAnnotationStatus.Stale);
         var unresolved = _connection.CreateCommand();
         unresolved.CommandText = """
-            SELECT COUNT(*)
+            SELECT paragraph_id, start_offset, length
             FROM ruby_unresolved_items u
             JOIN ruby_batches b ON b.id = u.batch_id
             WHERE b.document_snapshot_id = $snapshotId;
             """;
         unresolved.Parameters.AddWithValue("$snapshotId", snapshotId.ToString("D"));
-        var unresolvedCount = Convert.ToInt32(
-            await unresolved.ExecuteScalarAsync(cancellationToken),
-            CultureInfo.InvariantCulture);
-        return (confirmed, proposed, stale, unresolvedCount);
+        var unresolvedKeys = new HashSet<(string ParagraphId, int Start, int Length)>();
+        await using (var reader = await unresolved.ExecuteReaderAsync(cancellationToken))
+            while (await reader.ReadAsync(cancellationToken))
+                unresolvedKeys.Add((reader.GetString(0), reader.GetInt32(1), reader.GetInt32(2)));
+        return new RubyPreflightCounts(confirmed, proposed, stale, unresolvedKeys.Count, effective.Conflicts);
+    }
+
+    private static (IReadOnlyList<(string ParagraphId, int Start, int Length, string Reading, RubyAnnotationStatus Status)> Items, IReadOnlyList<string> Conflicts)
+        SelectEffectiveRuby(IEnumerable<(string ParagraphId, int Start, int Length, string Reading, RubyAnnotationStatus Status, DateTimeOffset Updated, DateTimeOffset Exported, string Id)> rows)
+    {
+        var items = new List<(string, int, int, string, RubyAnnotationStatus)>();
+        var conflicts = new List<string>();
+        foreach (var group in rows.GroupBy(item => (item.ParagraphId, item.Start, item.Length)))
+        {
+            if (group.Select(item => item.Reading).Distinct(StringComparer.Ordinal).Skip(1).Any())
+            {
+                conflicts.Add($"RubyConflict:{group.Key.ParagraphId}:{group.Key.Start}:{group.Key.Length}");
+                continue;
+            }
+            var latest = group.OrderByDescending(item => item.Updated)
+                .ThenByDescending(item => item.Exported).ThenByDescending(item => item.Id, StringComparer.Ordinal).First();
+            items.Add((latest.ParagraphId, latest.Start, latest.Length, latest.Reading, latest.Status));
+        }
+        return (items, conflicts);
     }
 
     public async Task<IReadOnlyList<RubyAnnotationProposal>> LoadRubyAnnotationsAsync(

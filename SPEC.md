@@ -2,6 +2,8 @@
 
 TateScribe is an offline Windows application that turns Japanese vertical-book screenshots into reviewed text and deterministic publication artifacts.
 
+Export preparation is read-only. DOCX/Denden confirmation cancellation and output failure must not create a document snapshot or ruby batch; successful output then persists the deduplicated snapshot. Ruby preflight reports the effective state per paragraph/range, with conflicting readings held out for review.
+
 ## ChatGPT-assisted work
 
 - `TextProofreading` compares OCR text with package images and returns TateScribe format 2 structured text. It never adds ruby or returns DOCX/EPUB/Markdown.

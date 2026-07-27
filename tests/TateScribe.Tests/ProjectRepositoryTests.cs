@@ -1173,6 +1173,52 @@ public sealed class ProjectRepositoryTests : IDisposable
         Assert.NotEqual(default, annotated.ExportedUtc);
     }
 
+    [Fact]
+    public async Task Ruby_preflight_deduplicates_locations_and_excludes_conflicting_readings_from_document()
+    {
+        Directory.CreateDirectory(_directory);
+        await using var repository = await SqliteProjectRepository.CreateAsync(_directory, CancellationToken.None);
+        var page = new ProjectPage(Guid.NewGuid(), "page.png", Path.Combine(_directory, "page.png"), "hash", 0, true, 0);
+        await File.WriteAllBytesAsync(page.SourcePath, [1]);
+        await repository.SavePagesAsync([page], CancellationToken.None);
+        var projectId = await repository.GetProjectIdAsync(CancellationToken.None);
+        var paragraph = new StructuredParagraph(Guid.NewGuid(), DocumentElementRole.BodyParagraph,
+            [new TextInline("AABB")], DocumentTextHash.Compute("AABB"), [new SourceSpan(page.Id, "0001", 0, 4)]);
+        var draft = new StructuredDocument(projectId, [paragraph], string.Empty);
+        var document = draft with { DocumentTextHash = DocumentTextHash.Compute(draft) };
+        var snapshotId = await repository.SaveDocumentSnapshotAsync(document, "Confirmed", CancellationToken.None);
+        var packagePages = new[] { new RubyPackagePage(page.Id, "0001", page.SourcePath, null) };
+
+        async Task ImportAsync(string reading, RubyAnnotationStatus status, string unresolvedReason)
+        {
+            var batchId = Guid.NewGuid();
+            await repository.RecordRubyBatchAsync(batchId, projectId, snapshotId, RubyPolicy.PreserveOriginalOnly,
+                packagePages, [], CancellationToken.None);
+            await repository.SaveRubyImportAsync(snapshotId, RubyPolicy.PreserveOriginalOnly,
+                new RubyImportDocument(1, projectId, batchId, document.DocumentTextHash,
+                    [new RubyAnnotationProposal(paragraph.ParagraphId.ToString("D"), 0, 2, "AA", reading,
+                        RubySource.UserConfirmed, 1, [], "test", Guid.NewGuid(), status)],
+                    [new RubyUnresolvedItem(paragraph.ParagraphId.ToString("D"), 2, 2, "BB", [], unresolvedReason)]),
+                CancellationToken.None);
+        }
+
+        await ImportAsync("aa", RubyAnnotationStatus.Confirmed, "first");
+        await Task.Delay(10);
+        await ImportAsync("aa", RubyAnnotationStatus.Stale, "second");
+        var deduplicated = await repository.GetRubyPreflightCountsAsync(snapshotId, CancellationToken.None);
+        Assert.Equal(0, deduplicated.Confirmed);
+        Assert.Equal(1, deduplicated.Stale);
+        Assert.Equal(1, deduplicated.Unresolved);
+
+        await Task.Delay(10);
+        await ImportAsync("different", RubyAnnotationStatus.Confirmed, "third");
+        var conflicting = await repository.GetRubyPreflightCountsAsync(snapshotId, CancellationToken.None);
+        Assert.Equal(0, conflicting.Confirmed);
+        Assert.Single(conflicting.Conflicts);
+        Assert.DoesNotContain((await repository.LoadStructuredDocumentAsync(projectId, snapshotId, CancellationToken.None))
+            .Paragraphs.Single().Inlines, inline => inline is RubyInline);
+    }
+
     public void Dispose()
     {
         TestFileCleanup.DeleteDirectory(_directory);
