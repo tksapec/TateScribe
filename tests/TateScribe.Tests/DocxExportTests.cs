@@ -1,6 +1,7 @@
 using DocumentFormat.OpenXml.Packaging;
 using DocumentFormat.OpenXml.Wordprocessing;
 using DocumentFormat.OpenXml.Validation;
+using System.Diagnostics;
 using TateScribe.Core.Export;
 using TateScribe.Core.Proofreading;
 using TateScribe.Infrastructure.Export;
@@ -62,6 +63,37 @@ public sealed class DocxExportTests : IDisposable
         Assert.Contains("ruby", xml, StringComparison.OrdinalIgnoreCase);
         Assert.DoesNotContain("ScreenshotBoundary", xml, StringComparison.Ordinal);
         Assert.DoesNotContain("w:type=\"page\"", xml, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task Ruby_diagnostic_reads_export_without_modifying_docx()
+    {
+        var document = new ExportDocument([
+            new ExportParagraph(ExportStyle.Normal, "base", new RubyAnnotation("base", "reading"))
+        ]);
+        await new OpenXmlDocumentExporter().ExportAsync(document, _path, CancellationToken.None);
+        var originalBytes = await File.ReadAllBytesAsync(_path);
+        var scriptPath = Path.Combine(FindRepositoryRoot(), "scripts", "compare-docx-ruby.ps1");
+        var startInfo = new ProcessStartInfo("powershell.exe")
+        {
+            UseShellExecute = false,
+            RedirectStandardOutput = true,
+            RedirectStandardError = true,
+        };
+        startInfo.ArgumentList.Add("-NoProfile");
+        startInfo.ArgumentList.Add("-File");
+        startInfo.ArgumentList.Add(scriptPath);
+        startInfo.ArgumentList.Add("-Path");
+        startInfo.ArgumentList.Add(_path);
+
+        using var process = Process.Start(startInfo)!;
+        var output = await process.StandardOutput.ReadToEndAsync();
+        var error = await process.StandardError.ReadToEndAsync();
+        await process.WaitForExitAsync();
+
+        Assert.True(process.ExitCode == 0, error);
+        Assert.Contains("w:ruby", output, StringComparison.Ordinal);
+        Assert.Equal(originalBytes, await File.ReadAllBytesAsync(_path));
     }
 
     [Fact]
@@ -163,5 +195,18 @@ public sealed class DocxExportTests : IDisposable
     public void Dispose()
     {
         if (File.Exists(_path)) File.Delete(_path);
+    }
+
+    private static string FindRepositoryRoot()
+    {
+        var directory = new DirectoryInfo(AppContext.BaseDirectory);
+        while (directory is not null)
+        {
+            if (File.Exists(Path.Combine(directory.FullName, "TateScribe.sln")))
+                return directory.FullName;
+            directory = directory.Parent;
+        }
+
+        throw new DirectoryNotFoundException("Could not locate the TateScribe repository root.");
     }
 }
