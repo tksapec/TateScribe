@@ -94,7 +94,7 @@ public sealed class ProjectRepositoryTests : IDisposable
         Assert.Equal(0, counts.Confirmed);
         Assert.Equal(1, counts.Proposed);
         Assert.Equal(0, counts.Stale);
-        Assert.Equal(1, counts.Unresolved);
+        Assert.Equal(0, counts.Unresolved);
     }
 
     [Fact]
@@ -1198,7 +1198,8 @@ public sealed class ProjectRepositoryTests : IDisposable
                 new RubyImportDocument(1, projectId, batchId, document.DocumentTextHash,
                     [new RubyAnnotationProposal(paragraph.ParagraphId.ToString("D"), 0, 2, "AA", reading,
                         RubySource.UserConfirmed, 1, [], "test", Guid.NewGuid(), status)],
-                    [new RubyUnresolvedItem(paragraph.ParagraphId.ToString("D"), 2, 2, "BB", [], unresolvedReason)]),
+                    [new RubyUnresolvedItem(paragraph.ParagraphId.ToString("D"), 0, 2, "AA", [], unresolvedReason),
+                     new RubyUnresolvedItem(paragraph.ParagraphId.ToString("D"), 2, 2, "BB", [], unresolvedReason)]),
                 CancellationToken.None);
         }
 

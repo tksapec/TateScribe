@@ -1042,6 +1042,10 @@ public sealed class SqliteProjectRepository : IAsyncDisposable
         await using (var reader = await unresolved.ExecuteReaderAsync(cancellationToken))
             while (await reader.ReadAsync(cancellationToken))
                 unresolvedKeys.Add((reader.GetString(0), reader.GetInt32(1), reader.GetInt32(2)));
+        var annotatedKeys = effective.Items
+            .Select(item => (item.ParagraphId, item.Start, item.Length))
+            .ToHashSet();
+        unresolvedKeys.ExceptWith(annotatedKeys);
         return new RubyPreflightCounts(confirmed, proposed, stale, unresolvedKeys.Count, effective.Conflicts);
     }
 
