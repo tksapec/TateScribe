@@ -2,7 +2,7 @@
 
 TateScribe creates converter input deterministically. ChatGPT does not create or edit these files, and TateScribe does not generate EPUB or ZIP.
 
-Standard output uses one flat folder:
+Standard output keeps instructions at the destination root and places every Denden Converter input inside `upload/`:
 
 ```text
 DendenExport/
