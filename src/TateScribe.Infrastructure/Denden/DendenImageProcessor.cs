@@ -1,4 +1,6 @@
 using OpenCvSharp;
+using TateScribe.Core.Images;
+using TateScribe.Infrastructure.Images;
 
 namespace TateScribe.Infrastructure.Denden;
 
@@ -8,20 +10,30 @@ internal static class DendenImageProcessor
 {
     internal const long MaximumImageBytes = 3L * 1024 * 1024;
 
-    public static PreparedDendenImage Prepare(string sourcePath, string outputStem)
+    public static PreparedDendenImage Prepare(
+        string sourcePath,
+        string outputStem,
+        NormalizedCrop? crop = null,
+        int rotationDegrees = 0)
     {
         if (!File.Exists(sourcePath))
             throw new FileNotFoundException("でんでん用データへ出力する画像が見つかりません。", sourcePath);
 
+        var effectiveCrop = crop ?? NormalizedCrop.Full;
+        effectiveCrop.Validate();
+        if (rotationDegrees is not (0 or 90 or 180 or 270))
+            throw new ArgumentOutOfRangeException(nameof(rotationDegrees));
         var source = File.ReadAllBytes(sourcePath);
         var format = DetectFormat(source);
-        var prepared = format switch
-        {
-            DendenImageFormat.Png => PreserveDecoded(source, outputStem, "png", sourcePath),
-            DendenImageFormat.Jpeg => PreserveDecoded(source, outputStem, "jpg", sourcePath),
-            DendenImageFormat.Gif => PreserveGif(source, outputStem, sourcePath),
-            _ => ConvertToPng(source, outputStem, sourcePath),
-        };
+        var prepared = effectiveCrop == NormalizedCrop.Full && rotationDegrees == 0
+            ? format switch
+            {
+                DendenImageFormat.Png => PreserveDecoded(source, outputStem, "png", sourcePath),
+                DendenImageFormat.Jpeg => PreserveDecoded(source, outputStem, "jpg", sourcePath),
+                DendenImageFormat.Gif => PreserveGif(source, outputStem, sourcePath),
+                _ => ConvertToPng(source, outputStem, sourcePath),
+            }
+            : TransformToPng(source, outputStem, sourcePath, effectiveCrop, rotationDegrees);
         if (prepared.Bytes.LongLength > MaximumImageBytes)
         {
             var size = prepared.Bytes.LongLength / (1024d * 1024d);
@@ -98,6 +110,30 @@ internal static class DendenImageProcessor
         {
             throw new InvalidDataException(
                 $"画像「{Path.GetFileName(sourcePath)}」をPNGへ変換できません。", exception);
+        }
+    }
+
+    private static PreparedDendenImage TransformToPng(
+        byte[] source,
+        string outputStem,
+        string sourcePath,
+        NormalizedCrop crop,
+        int rotationDegrees)
+    {
+        try
+        {
+            using var decoded = Cv2.ImDecode(source, ImreadModes.Unchanged);
+            if (decoded.Empty())
+                throw new InvalidDataException("The image could not be decoded.");
+            using var transformed = ImageTransform.RotateAndCrop(decoded, crop, rotationDegrees);
+            Cv2.ImEncode(".png", transformed, out var encoded,
+                new ImageEncodingParam(ImwriteFlags.PngCompression, 9));
+            return new PreparedDendenImage($"{outputStem}.png", encoded);
+        }
+        catch (Exception exception) when (exception is OpenCVException or InvalidDataException)
+        {
+            throw new InvalidDataException(
+                $"Image '{Path.GetFileName(sourcePath)}' could not be transformed to PNG.", exception);
         }
     }
 

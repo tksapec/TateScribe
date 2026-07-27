@@ -9,38 +9,13 @@ namespace TateScribe.Infrastructure.Denden;
 public sealed class DendenExportService : IDendenExportService
 {
     private static readonly UTF8Encoding Utf8NoBom = new(false);
+    private readonly Dictionary<Guid, PreparedExport> preparedPlans = [];
 
     public void Validate(
         DendenExportDocument exportDocument,
         DendenExportOptions options)
     {
-        options.Validate();
-        if (exportDocument.Blocks.Count == 0)
-            throw new InvalidOperationException(
-                "本文または挿絵がないため、Markdownファイルを出力できません。");
-        ValidateGlobalRubies(exportDocument.Document, options.ApprovedGlobalRubies);
-        _ = string.IsNullOrWhiteSpace(options.CoverImagePath)
-            ? null
-            : DendenImageProcessor.Prepare(options.CoverImagePath, "cover");
-        var illustrationCount = 0;
-        foreach (var block in exportDocument.Blocks.OfType<DendenIllustrationBlock>())
-        {
-            illustrationCount++;
-            _ = DendenImageProcessor.Prepare(
-                block.Illustration.SourcePath,
-                $"illustration-{illustrationCount:000}");
-        }
-        var contentFileCount = options.SplitByChapter
-            ? SplitBlocksByChapter(exportDocument.Blocks).Count
-            : 1;
-        var outputFileCount = contentFileCount
-            + 3
-            + (string.IsNullOrWhiteSpace(options.CoverImagePath) ? 0 : 1)
-            + illustrationCount
-            + (options.ApprovedGlobalRubies is { Count: > 0 } ? 1 : 0);
-        if (outputFileCount > 100)
-            throw new InvalidOperationException(
-                $"出力ファイル数は{outputFileCount}件です。でんでんコンバーターの上限100件を超えています。");
+        _ = PrepareExport(exportDocument, options);
     }
 
     public IReadOnlyList<ExportPreflightIssue> Inspect(
@@ -63,6 +38,39 @@ public sealed class DendenExportService : IDendenExportService
                     true),
             ];
         }
+    }
+
+    public DendenExportPlan Prepare(
+        DendenExportDocument exportDocument,
+        DendenExportOptions options)
+    {
+        try
+        {
+            var planId = Guid.NewGuid();
+            lock (preparedPlans)
+                preparedPlans.Add(planId, PrepareExport(exportDocument, options));
+            return new DendenExportPlan(planId, []);
+        }
+        catch (Exception exception) when (exception is
+            ArgumentException or InvalidOperationException or InvalidDataException or IOException)
+        {
+            return new DendenExportPlan(Guid.Empty,
+            [new ExportPreflightIssue("DendenValidationFailed", exception.Message, true)]);
+        }
+    }
+
+    public Task ExportAsync(
+        DendenExportPlan plan,
+        string destinationDirectory,
+        CancellationToken cancellationToken)
+    {
+        PreparedExport prepared;
+        lock (preparedPlans)
+        {
+            if (!preparedPlans.Remove(plan.PlanId, out prepared!))
+                throw new InvalidOperationException("The Denden export plan is missing or has already been used.");
+        }
+        return WritePreparedExportAsync(prepared, destinationDirectory, cancellationToken);
     }
 
     public async Task ExportAsync(
@@ -94,56 +102,46 @@ public sealed class DendenExportService : IDendenExportService
         string destinationDirectory,
         CancellationToken cancellationToken)
     {
+        await WritePreparedExportAsync(
+            PrepareExport(exportDocument, options), destinationDirectory, cancellationToken);
+    }
+
+    private static async Task WritePreparedExportAsync(
+        PreparedExport prepared,
+        string destinationDirectory,
+        CancellationToken cancellationToken)
+    {
         if (Directory.Exists(destinationDirectory) || File.Exists(destinationDirectory))
             throw new IOException($"出力先は既に存在します: {destinationDirectory}");
-        Validate(exportDocument, options);
-        var chapters = options.SplitByChapter ? SplitBlocksByChapter(exportDocument.Blocks) : [];
-        var cover = string.IsNullOrWhiteSpace(options.CoverImagePath)
-            ? null
-            : DendenImageProcessor.Prepare(options.CoverImagePath, "cover");
-        var illustrationBlocks = exportDocument.Blocks.OfType<DendenIllustrationBlock>().ToArray();
-        var illustrations = illustrationBlocks
-            .Select((block, index) => new PreparedIllustration(
-                block,
-                DendenImageProcessor.Prepare(
-                    block.Illustration.SourcePath,
-                    $"illustration-{index + 1:000}")))
-            .ToArray();
-        var outputFileCount = (options.SplitByChapter ? chapters.Count : 1)
-            + 3
-            + (cover is null ? 0 : 1)
-            + illustrations.Length
-            + (options.ApprovedGlobalRubies is { Count: > 0 } ? 1 : 0);
-        if (outputFileCount > 100)
-            throw new InvalidOperationException(
-                $"出力ファイル数は{outputFileCount}件です。でんでんコンバーターの上限100件を超えています。");
-        Directory.CreateDirectory(destinationDirectory);
+        var uploadDirectory = Path.Combine(destinationDirectory, "upload");
         try
         {
-            if (!options.SplitByChapter)
+            Directory.CreateDirectory(destinationDirectory);
+            Directory.CreateDirectory(uploadDirectory);
+            if (!prepared.Options.SplitByChapter)
                 await WriteAsync(
                     "book.md",
-                    BuildBook(exportDocument.Blocks, illustrations, options.DisplayIllustrationList));
-            if (options.SplitByChapter)
+                    BuildBook(prepared.Document.Blocks, prepared.Illustrations, prepared.Options.DisplayIllustrationList));
+            if (prepared.Options.SplitByChapter)
             {
-                for (var index = 0; index < chapters.Count; index++)
+                for (var index = 0; index < prepared.Chapters.Count; index++)
                     await WriteAsync(
                         $"chapter-{index + 1:000}.md",
-                        BuildBook(chapters[index], illustrations, options.DisplayIllustrationList));
+                        BuildBook(prepared.Chapters[index], prepared.Illustrations, prepared.Options.DisplayIllustrationList));
             }
-            await WriteAsync("ddconv.yml", BuildYaml(options));
-            await WriteAsync("default.css", BuildCss(options.VerticalWriting));
-            await WriteAsync("README.txt", Readme);
-            if (cover is not null)
+            await WriteAsync("ddconv.yml", BuildYaml(prepared.Options));
+            await WriteAsync("default.css", BuildCss(prepared.Options.VerticalWriting));
+            await File.WriteAllTextAsync(Path.Combine(destinationDirectory, "README.txt"), Readme, Utf8NoBom, cancellationToken);
+            if (prepared.Cover is not null)
                 await File.WriteAllBytesAsync(
-                    Path.Combine(destinationDirectory, cover.FileName), cover.Bytes, cancellationToken);
-            foreach (var illustration in illustrations)
+                    Path.Combine(uploadDirectory, prepared.Cover.FileName), prepared.Cover.Bytes, cancellationToken);
+            foreach (var illustration in prepared.Illustrations)
                 await File.WriteAllBytesAsync(
-                    Path.Combine(destinationDirectory, illustration.Image.FileName),
+                    Path.Combine(uploadDirectory, illustration.Image.FileName),
                     illustration.Image.Bytes,
                     cancellationToken);
-            if (options.ApprovedGlobalRubies is { Count: > 0 })
-                await WriteAsync("ruby.csv", string.Join("\n", options.ApprovedGlobalRubies
+            if (prepared.Options.ApprovedGlobalRubies is { Count: > 0 })
+                await WriteAsync("ruby.csv", string.Join("\n", prepared.Options.ApprovedGlobalRubies
                     .OrderBy(pair => pair.Key, StringComparer.Ordinal)
                     .Select(pair => $"{Csv(pair.Key)},{Csv(pair.Value)}")) + "\n");
         }
@@ -157,8 +155,40 @@ public sealed class DendenExportService : IDendenExportService
         async Task WriteAsync(string fileName, string text)
         {
             var normalized = text.Replace("\r\n", "\n", StringComparison.Ordinal).Replace('\r', '\n');
-            await File.WriteAllTextAsync(Path.Combine(destinationDirectory, fileName), normalized, Utf8NoBom, cancellationToken);
+            await File.WriteAllTextAsync(Path.Combine(uploadDirectory, fileName), normalized, Utf8NoBom, cancellationToken);
         }
+    }
+
+    private static PreparedExport PrepareExport(
+        DendenExportDocument exportDocument,
+        DendenExportOptions options)
+    {
+        options.Validate();
+        if (exportDocument.Blocks.Count == 0)
+            throw new InvalidOperationException("本文または挿絵がないため、Markdownファイルを出力できません。");
+        ValidateGlobalRubies(exportDocument.Document, options.ApprovedGlobalRubies);
+        var chapters = options.SplitByChapter ? SplitBlocksByChapter(exportDocument.Blocks) : [];
+        var cover = string.IsNullOrWhiteSpace(options.CoverImagePath)
+            ? null
+            : DendenImageProcessor.Prepare(options.CoverImagePath, "cover");
+        var illustrations = exportDocument.Blocks.OfType<DendenIllustrationBlock>()
+            .Select((block, index) => new PreparedIllustration(
+                block,
+                DendenImageProcessor.Prepare(
+                    block.Illustration.SourcePath,
+                    $"illustration-{index + 1:000}",
+                    block.Illustration.Crop,
+                    block.Illustration.RotationDegrees)))
+            .ToArray();
+        var outputFileCount = (options.SplitByChapter ? chapters.Count : 1)
+            + 3
+            + (cover is null ? 0 : 1)
+            + illustrations.Length
+            + (options.ApprovedGlobalRubies is { Count: > 0 } ? 1 : 0);
+        if (outputFileCount > 100)
+            throw new InvalidOperationException(
+                $"出力ファイル数は{outputFileCount}件です。でんでんコンバーターの上限100件を超えています。");
+        return new PreparedExport(exportDocument, options, chapters, cover, illustrations);
     }
 
     private static string BuildBook(
@@ -272,11 +302,17 @@ public sealed class DendenExportService : IDendenExportService
 
     private static string Escape(string value)
     {
-        var result = value.Replace("\\", "\\\\", StringComparison.Ordinal)
+        var result = value.Replace("&", "&amp;", StringComparison.Ordinal)
+            .Replace("<", "&lt;", StringComparison.Ordinal)
+            .Replace(">", "&gt;", StringComparison.Ordinal)
+            .Replace("\\", "\\\\", StringComparison.Ordinal)
             .Replace("{", "\\{", StringComparison.Ordinal)
             .Replace("}", "\\}", StringComparison.Ordinal)
             .Replace("|", "\\|", StringComparison.Ordinal);
-        if (result.StartsWith('#') || result.StartsWith('>') || result.StartsWith('-')
+        if (System.Text.RegularExpressions.Regex.IsMatch(result, @"^\d+\.\s")
+            || result.StartsWith("    ", StringComparison.Ordinal)
+            || result.StartsWith('\t')
+            || result.StartsWith('#') || result.StartsWith('>') || result.StartsWith('-')
             || result.StartsWith('*') || result.StartsWith('+'))
             result = "\\" + result;
         return result.Replace("[", "\\[", StringComparison.Ordinal)
@@ -351,12 +387,19 @@ public sealed class DendenExportService : IDendenExportService
         DendenIllustrationBlock Block,
         PreparedDendenImage Image);
 
+    private sealed record PreparedExport(
+        DendenExportDocument Document,
+        DendenExportOptions Options,
+        IReadOnlyList<IReadOnlyList<DendenContentBlock>> Chapters,
+        PreparedDendenImage? Cover,
+        IReadOnlyList<PreparedIllustration> Illustrations);
+
     private const string Readme = """
-        このフォルダーを、でんでんコンバーターへ渡してください。
-        MarkdownファイルはTateScribeが確定本文と確定ルビから生成したものです。
-        アップロードする全ファイルは同じフォルダー直下にあります。
-        Markdownと画像をまとめて選択してアップロードしてください。
-        原書スクリーンショットは出力されません。
-        明示的に採用した挿絵だけが含まれます。
+        Upload instructions
+
+        Open the upload folder. Select every file inside upload and upload those files together.
+        Never select or upload this README.txt itself. README.txt is only an instruction file.
+        Markdown is generated from TateScribe's confirmed body text and confirmed rubies.
+        Original screenshots are not included; only explicitly selected illustrations are included.
         """;
 }

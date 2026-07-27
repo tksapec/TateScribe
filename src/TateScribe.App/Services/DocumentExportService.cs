@@ -45,7 +45,9 @@ public sealed class DocumentExportService
                     page.Id,
                     page.SortOrder,
                     page.SourcePath,
-                    $"挿絵 {index + 1}"))
+                    $"挿絵 {index + 1}",
+                    Crop: page.Crop ?? TateScribe.Core.Images.NormalizedCrop.Full,
+                    RotationDegrees: page.RotationDegrees))
                 .ToArray()
             : [];
         var dendenDocument = DendenDocumentAssembler.Assemble(

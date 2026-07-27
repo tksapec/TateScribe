@@ -12,11 +12,11 @@
 10. Import the returned JSON. A validation error leaves the database unchanged.
 11. Review each ruby proposal. The body is read-only here. Confirm/reject proposals, edit parent ranges/readings, inspect every matching OCR coordinate and candidate warning, and review unresolved items. A warning-free image/text candidate with confidence 0.7 or higher can be bulk-confirmed; suggested, ambiguous, mismatched, low-confidence, stale, and rejected items cannot.
 12. Export the ruby-enabled DOCX. The common preflight shows unproofread, Other, empty pages, and ruby states. Only confirmed, non-stale ruby is included.
-13. Enter metadata and export the Denden Converter folder. Enable `挿絵ページを含める` only when `Illustration` pages should be included. Markdown, images, YAML, and CSS are all placed in one folder; select them together when uploading.
+13. Enter metadata and export the Denden Converter folder. Enable `挿絵ページを含める` only when `Illustration` pages should be included. Open its `upload` folder and select every file inside it together when uploading; never select the root `README.txt`.
 14. Use Denden Converter to create EPUB outside TateScribe.
 
 If the body changes after a ruby package was exported, TateScribe marks the associated ruby stale. Export a new package and review the new positions; TateScribe does not reattach ruby by blind text search.
 
 The main sidebar scrolls independently. If all commands do not fit vertically, use its scrollbar; the page list and page-order controls remain available below it.
 
-Denden images may be PNG, JPEG, GIF, WebP, BMP, or TIFF input. PNG/JPEG/GIF remain in that format; other decodable formats become PNG. Output stops before creating the folder if an image exceeds 3 MiB after preparation or the total exceeds 100 files. TateScribe itself never creates EPUB or a release ZIP from this command.
+Denden images may be PNG, JPEG, GIF, WebP, BMP, or TIFF input. Full-crop unrotated PNG/JPEG/GIF remain in that format; transformed illustrations become PNG after rotation and crop. Output stops before creating the folder if an image exceeds 3 MiB after preparation or files inside `upload` exceed 100. TateScribe itself never creates EPUB or a release ZIP from this command.

@@ -1,4 +1,6 @@
 using TateScribe.Core.Ruby;
+using TateScribe.Core.Images;
+using TateScribe.Core.Export;
 
 namespace TateScribe.Core.Denden;
 
@@ -40,7 +42,16 @@ public sealed record DendenIllustration(
     int SortOrder,
     string SourcePath,
     string AltText,
-    string? Caption = null);
+    string? Caption = null,
+    NormalizedCrop? Crop = null,
+    int RotationDegrees = 0);
+
+public sealed record DendenExportPlan(
+    Guid PlanId,
+    IReadOnlyList<ExportPreflightIssue> Issues)
+{
+    public bool CanExport => !Issues.Any(issue => issue.IsFatal);
+}
 
 public abstract record DendenContentBlock;
 

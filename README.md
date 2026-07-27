@@ -17,7 +17,7 @@ Windows向けの、縦書き電子書籍スクリーンショットを編集可�
 11. ルビ確認画面で原文・根拠・座標・注意を確認し、候補を個別に確定または却下します。画像・本文に明示された根拠を持つ候補だけを一括確定できます。
 12. `保存済みルビ候補を確認`から後で再確認できます。本文を変更すると、対応する確定ルビはStaleになり、出力へ使われません。
 13. `DOCXへ出力` を選ぶと、同じフォルダーに `フォルダー名.docx` を出力します。1段落の複数ルビを含め、確定済みのルビだけをTateScribeが生成します。
-14. `でんでん用データを出力`では、書名・著者・文字方向等を入力し、`book.md`、公式形式の`ddconv.yml`、`default.css`、`README.txt`をフォルダーへ生成します。挿絵は既定OFFで、明示的に有効にした場合だけ`PageRole=Illustration`の画像を出力フォルダー直下へ置き、Markdown本文から必ず参照します。EPUBとZIPは生成しません。
+14. `でんでん用データを出力`では、書名・著者・文字方向等を入力し、出力先の`README.txt`と`upload/`を生成します。`upload/`には`book.md`（または章分割Markdown）、公式形式の`ddconv.yml`、`default.css`、必要な画像と`ruby.csv`を置きます。アップロード時は`upload/`内の全ファイルを選択し、ルートの`README.txt`は選択しません。挿絵は既定OFFで、明示的に有効にした場合だけ`PageRole=Illustration`の画像を出力します。EPUBとZIPは生成しません。
 
 DOCXは横書きです。元画像の縦書き配置やスクリーンショット境界は再現せず、画像境界による改ページも作りません。
 
@@ -57,4 +57,4 @@ Illustration と Blank は本文出力から除外します。Other は本文が
 
 確定本文は安定した段落ID、本文ハッシュ、元ページ範囲を持つ構造化スナップショットとして保存します。ルビは本文とは別に `Proposed`、`Confirmed`、`Rejected`、`Stale` で管理し、`Confirmed`だけをDOCXとでんでん用データへ出力します。詳細は [ChatGPTワークフロー](docs/CHATGPT_WORKFLOWS.md)、[ルビJSON形式](docs/RUBY_JSON_FORMAT.md)、[でんでん出力](docs/DENDEN_EXPORT.md)を参照してください。
 
-DOCXとでんでん用データは同じ出力前確認を使用し、未校正、Other本文、空本文、未確定／Proposed／Staleルビ、挿絵、既存出力先を表示します。未確定、Proposed、Staleルビは最終出力へ含めません。でんでん用画像はPNG/JPEG/GIFに限定し、WebP/BMP/TIFF等は決定論的にPNGへ変換します。変換後の1画像が3 MiBを超える場合、または総ファイル数が100件を超える場合は出力先を作成せず停止します。
+DOCXとでんでん用データは同じ出力前確認を使用し、未校正、Other本文、空本文、未確定／Proposed／Staleルビ、挿絵、既存出力先を表示します。未確定、Proposed、Staleルビは最終出力へ含めません。でんでん用画像は、全体・無回転のPNG/JPEG/GIFを保持し、WebP/BMP/TIFF等と変形済み挿絵は決定論的にPNGへ変換します。変換後の1画像が3 MiBを超える場合、または`upload/`内の総ファイル数が100件を超える場合は出力先を作成せず停止します。

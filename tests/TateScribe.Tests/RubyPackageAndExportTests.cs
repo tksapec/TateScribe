@@ -191,16 +191,16 @@ public sealed class RubyPackageAndExportTests : IDisposable
 
         foreach (var name in new[] { "book.md", "ddconv.yml", "default.css", "README.txt" })
         {
-            var left = await File.ReadAllBytesAsync(Path.Combine(first, name));
-            var right = await File.ReadAllBytesAsync(Path.Combine(second, name));
+            var left = await File.ReadAllBytesAsync(Path.Combine(first, name == "README.txt" ? name : Path.Combine("upload", name)));
+            var right = await File.ReadAllBytesAsync(Path.Combine(second, name == "README.txt" ? name : Path.Combine("upload", name)));
             Assert.Equal(left, right);
             Assert.False(left.Length >= 3 && left[0] == 0xEF && left[1] == 0xBB && left[2] == 0xBF);
             Assert.DoesNotContain((byte)'\r', left);
         }
-        var markdown = await File.ReadAllTextAsync(Path.Combine(first, "book.md"), Encoding.UTF8);
+        var markdown = await File.ReadAllTextAsync(Path.Combine(first, "upload", "book.md"), Encoding.UTF8);
         Assert.Contains("{八角|やすみ}", markdown, StringComparison.Ordinal);
         Assert.Contains("\\{注\\}", markdown, StringComparison.Ordinal);
-        var yaml = await File.ReadAllTextAsync(Path.Combine(first, "ddconv.yml"));
+        var yaml = await File.ReadAllTextAsync(Path.Combine(first, "upload", "ddconv.yml"));
         Assert.StartsWith("ddconvVersion: 1.0\n", yaml, StringComparison.Ordinal);
         Assert.Contains("titles:\n  - content: \"書名\"", yaml, StringComparison.Ordinal);
         Assert.Contains("creators:\n  - content: \"著者\"\n    role: aut", yaml, StringComparison.Ordinal);
@@ -215,9 +215,91 @@ public sealed class RubyPackageAndExportTests : IDisposable
         Assert.DoesNotContain("titlePage:", yaml, StringComparison.Ordinal);
         Assert.DoesNotContain("tableOfContents", yaml, StringComparison.Ordinal);
         Assert.DoesNotContain("tcyDigitCount", yaml, StringComparison.Ordinal);
-        Assert.False(File.Exists(Path.Combine(first, "ruby.csv")));
+        Assert.False(File.Exists(Path.Combine(first, "upload", "ruby.csv")));
         Assert.Empty(Directory.GetFiles(first, "*.epub"));
         Assert.Empty(Directory.GetFiles(first, "*.zip"));
+    }
+
+    [Fact]
+    public async Task Denden_writes_a_root_readme_and_an_upload_only_package()
+    {
+        Directory.CreateDirectory(tempPath);
+        var destination = Path.Combine(tempPath, "upload-layout");
+
+        await new DendenExportService().ExportAsync(
+            CreateDocument(), new DendenExportOptions("Book", "Author"), destination, CancellationToken.None);
+
+        Assert.True(File.Exists(Path.Combine(destination, "README.txt")));
+        Assert.False(File.Exists(Path.Combine(destination, "book.md")));
+        var upload = Path.Combine(destination, "upload");
+        Assert.Equal(
+            ["book.md", "ddconv.yml", "default.css"],
+            Directory.GetFiles(upload).Select(path => Path.GetFileName(path)!).OrderBy(name => name, StringComparer.Ordinal).ToArray());
+        var readme = await File.ReadAllTextAsync(Path.Combine(destination, "README.txt"));
+        Assert.Contains("upload", readme, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("every file", readme, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("Never select or upload this README", readme, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public async Task Denden_escapes_untrusted_body_text_without_escaping_generated_markdown_or_rubies()
+    {
+        Directory.CreateDirectory(tempPath);
+        var destination = Path.Combine(tempPath, "escaping");
+        var pageId = Guid.NewGuid();
+        StructuredParagraph Paragraph(DocumentElementRole role, params InlineElement[] inlines)
+        {
+            var text = string.Concat(inlines.Select(inline => inline is TextInline value ? value.Text : ((RubyInline)inline).BaseText));
+            return new StructuredParagraph(Guid.NewGuid(), role, inlines, DocumentTextHash.Compute(text),
+                [new SourceSpan(pageId, "0001", 0, text.Length)]);
+        }
+        var draft = new StructuredDocument(Guid.NewGuid(),
+        [
+            Paragraph(DocumentElementRole.ChapterTitle, new TextInline("A & <B>")),
+            Paragraph(DocumentElementRole.BodyParagraph, new TextInline("1986. What a great season.")),
+            Paragraph(DocumentElementRole.BodyParagraph, new TextInline("    indented")),
+            Paragraph(DocumentElementRole.BodyParagraph, new TextInline("\tindented")),
+            Paragraph(DocumentElementRole.BodyParagraph, new TextInline("{brace|pipe}\\backslash *em* [link]! `code` _under_")),
+            Paragraph(DocumentElementRole.BodyParagraph, new TextInline("\u3000full width space")),
+            Paragraph(DocumentElementRole.BodyParagraph, new RubyInline(Guid.NewGuid(), "base", "reading", RubySource.TextConfirmed, 1)),
+            Paragraph(DocumentElementRole.SceneBreak, new TextInline(string.Empty)),
+        ], string.Empty);
+        var document = draft with { DocumentTextHash = DocumentTextHash.Compute(draft) };
+
+        await new DendenExportService().ExportAsync(document, new DendenExportOptions("Book", "Author"), destination, CancellationToken.None);
+
+        var markdown = await File.ReadAllTextAsync(Path.Combine(destination, "upload", "book.md"));
+        Assert.Contains("# A &amp; &lt;B&gt;", markdown, StringComparison.Ordinal);
+        Assert.Contains("\\1986. What a great season.", markdown, StringComparison.Ordinal);
+        Assert.Contains("\\    indented", markdown, StringComparison.Ordinal);
+        Assert.Contains("\\\tindented", markdown, StringComparison.Ordinal);
+        Assert.Contains("\\{brace\\|pipe\\}\\\\backslash \\*em\\* \\[link\\]\\! \\`code\\` \\_under\\_", markdown, StringComparison.Ordinal);
+        Assert.Contains("\u3000full width space", markdown, StringComparison.Ordinal);
+        Assert.Contains("{base|reading}", markdown, StringComparison.Ordinal);
+        Assert.Contains("***", markdown, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task Denden_applies_illustration_rotation_then_crop_without_changing_the_source()
+    {
+        Directory.CreateDirectory(tempPath);
+        var source = Path.Combine(tempPath, "rotated.png");
+        using (var image = new Mat(6, 8, MatType.CV_8UC3, new Scalar(10, 20, 30)))
+            Assert.True(Cv2.ImWrite(source, image));
+        var original = await File.ReadAllBytesAsync(source);
+        var illustration = new DendenIllustration(
+            Guid.NewGuid(), 1, source, "Illustration", Crop: new TateScribe.Core.Images.NormalizedCrop(0, 0, .5, 1), RotationDegrees: 90);
+        var document = CreateDocument();
+        var export = new DendenExportDocument(document,
+            [new DendenParagraphBlock(document.Paragraphs[0]), new DendenIllustrationBlock(illustration)]);
+        var destination = Path.Combine(tempPath, "transformed-illustration");
+
+        await new DendenExportService().ExportAsync(export, new DendenExportOptions("Book", "Author"), destination, CancellationToken.None);
+
+        using var rendered = Cv2.ImRead(Path.Combine(destination, "upload", "illustration-001.png"), ImreadModes.Color);
+        Assert.Equal(3, rendered.Width);
+        Assert.Equal(8, rendered.Height);
+        Assert.Equal(original, await File.ReadAllBytesAsync(source));
     }
 
     [Fact]
@@ -249,7 +331,7 @@ public sealed class RubyPackageAndExportTests : IDisposable
             destination,
             CancellationToken.None);
 
-        var yaml = await File.ReadAllTextAsync(Path.Combine(destination, "ddconv.yml"));
+        var yaml = await File.ReadAllTextAsync(Path.Combine(destination, "upload", "ddconv.yml"));
         Assert.Contains("content: \"題名:\\n\\\"引用\\\"\"", yaml, StringComparison.Ordinal);
         Assert.Contains("content: \"著者\\\\名\\t補記\"", yaml, StringComparison.Ordinal);
         Assert.DoesNotContain("題名:\n", yaml, StringComparison.Ordinal);
@@ -270,11 +352,11 @@ public sealed class RubyPackageAndExportTests : IDisposable
 
         Assert.Contains(
             "pageDirection: ltr",
-            await File.ReadAllTextAsync(Path.Combine(destination, "ddconv.yml")),
+            await File.ReadAllTextAsync(Path.Combine(destination, "upload", "ddconv.yml")),
             StringComparison.Ordinal);
         Assert.Contains(
             "writing-mode: horizontal-tb",
-            await File.ReadAllTextAsync(Path.Combine(destination, "default.css")),
+            await File.ReadAllTextAsync(Path.Combine(destination, "upload", "default.css")),
             StringComparison.Ordinal);
     }
 
@@ -306,22 +388,22 @@ public sealed class RubyPackageAndExportTests : IDisposable
 
         Assert.Equal(
             await File.ReadAllBytesAsync(cover),
-            await File.ReadAllBytesAsync(Path.Combine(destination, "cover.jpg")));
+            await File.ReadAllBytesAsync(Path.Combine(destination, "upload", "cover.jpg")));
         Assert.Equal(
             await File.ReadAllBytesAsync(firstIllustration),
-            await File.ReadAllBytesAsync(Path.Combine(destination, "illustration-001.png")));
+            await File.ReadAllBytesAsync(Path.Combine(destination, "upload", "illustration-001.png")));
         Assert.Equal(
             await File.ReadAllBytesAsync(secondIllustration),
-            await File.ReadAllBytesAsync(Path.Combine(destination, "illustration-002.jpg")));
+            await File.ReadAllBytesAsync(Path.Combine(destination, "upload", "illustration-002.jpg")));
         Assert.Equal(
             await File.ReadAllBytesAsync(thirdIllustration),
-            await File.ReadAllBytesAsync(Path.Combine(destination, "illustration-003.gif")));
+            await File.ReadAllBytesAsync(Path.Combine(destination, "upload", "illustration-003.gif")));
         Assert.False(Directory.Exists(Path.Combine(destination, "images")));
-        var markdown = await File.ReadAllTextAsync(Path.Combine(destination, "book.md"));
+        var markdown = await File.ReadAllTextAsync(Path.Combine(destination, "upload", "book.md"));
         Assert.Contains("![挿絵 1](illustration-001.png)", markdown, StringComparison.Ordinal);
         Assert.Contains("![挿絵 2](illustration-002.jpg)", markdown, StringComparison.Ordinal);
         Assert.Contains("![挿絵 3](illustration-003.gif)", markdown, StringComparison.Ordinal);
-        Assert.Contains("Markdownと画像をまとめて選択", await File.ReadAllTextAsync(
+        Assert.Contains("Select every file inside upload", await File.ReadAllTextAsync(
             Path.Combine(destination, "README.txt")), StringComparison.Ordinal);
     }
 
@@ -339,9 +421,9 @@ public sealed class RubyPackageAndExportTests : IDisposable
             destination,
             CancellationToken.None);
 
-        var bytes = await File.ReadAllBytesAsync(Path.Combine(destination, "cover.png"));
+        var bytes = await File.ReadAllBytesAsync(Path.Combine(destination, "upload", "cover.png"));
         Assert.Equal(new byte[] { 0x89, 0x50, 0x4e, 0x47 }, bytes[..4]);
-        Assert.False(File.Exists(Path.Combine(destination, "cover.jpg")));
+        Assert.False(File.Exists(Path.Combine(destination, "upload", "cover.jpg")));
     }
 
     [Theory]
@@ -474,7 +556,7 @@ public sealed class RubyPackageAndExportTests : IDisposable
             destination,
             CancellationToken.None);
 
-        var markdown = await File.ReadAllTextAsync(Path.Combine(destination, "book.md"));
+        var markdown = await File.ReadAllTextAsync(Path.Combine(destination, "upload", "book.md"));
         var paragraphPosition = markdown.IndexOf(text, StringComparison.Ordinal);
         var imagePosition = markdown.IndexOf("![挿絵 1](illustration-001.png)", StringComparison.Ordinal);
         Assert.True(paragraphPosition >= 0 && imagePosition > paragraphPosition);
@@ -506,7 +588,7 @@ public sealed class RubyPackageAndExportTests : IDisposable
             destination,
             CancellationToken.None);
 
-        var markdown = await File.ReadAllTextAsync(Path.Combine(destination, "book.md"));
+        var markdown = await File.ReadAllTextAsync(Path.Combine(destination, "upload", "book.md"));
         Assert.Contains("<figure class=\"illustration\">", markdown, StringComparison.Ordinal);
         Assert.Contains("<img src=\"illustration-001.png\" alt=\"挿絵 1\">", markdown, StringComparison.Ordinal);
         Assert.Contains("<figcaption>図1. 場面</figcaption>", markdown, StringComparison.Ordinal);
@@ -618,13 +700,13 @@ public sealed class RubyPackageAndExportTests : IDisposable
             destination, CancellationToken.None);
 
         Assert.False(File.Exists(Path.Combine(destination, "book.md")));
-        var firstChapter = await File.ReadAllTextAsync(Path.Combine(destination, "chapter-001.md"));
+        var firstChapter = await File.ReadAllTextAsync(Path.Combine(destination, "upload", "chapter-001.md"));
         Assert.Contains("# 第一章", firstChapter, StringComparison.Ordinal);
         Assert.Contains("{八角|やすみ}と{八角|はっかく}", firstChapter, StringComparison.Ordinal);
         Assert.Contains("## 小見出し", firstChapter, StringComparison.Ordinal);
         Assert.Contains("## 2", firstChapter, StringComparison.Ordinal);
         Assert.Contains("***", firstChapter, StringComparison.Ordinal);
-        Assert.True(File.Exists(Path.Combine(destination, "chapter-002.md")));
+        Assert.True(File.Exists(Path.Combine(destination, "upload", "chapter-002.md")));
     }
 
     [Fact]

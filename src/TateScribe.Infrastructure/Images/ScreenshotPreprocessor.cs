@@ -31,8 +31,29 @@ public sealed class ScreenshotPreprocessor
     {
         using var source = Cv2.ImRead(sourcePath, ImreadModes.Color);
         if (source.Empty()) throw new InvalidDataException("The image could not be decoded.");
+        using var cropped = ImageTransform.RotateAndCrop(source, crop, rotationDegrees);
+        using var gray = new Mat();
+        Cv2.CvtColor(cropped, gray, ColorConversionCodes.BGR2GRAY);
+        if (Cv2.Mean(gray).Val0 < 128) Cv2.BitwiseNot(gray, gray);
+        Cv2.ImWrite(cachePath, gray);
+    }
+
+}
+
+internal static class ImageTransform
+{
+    internal static Mat RotateAndCrop(Mat source, NormalizedCrop crop, int rotationDegrees)
+    {
+        crop.Validate();
         using var rotated = new Mat();
-        Rotate(source, rotated, rotationDegrees);
+        switch (rotationDegrees)
+        {
+            case 0: source.CopyTo(rotated); break;
+            case 90: Cv2.Rotate(source, rotated, RotateFlags.Rotate90Clockwise); break;
+            case 180: Cv2.Rotate(source, rotated, RotateFlags.Rotate180); break;
+            case 270: Cv2.Rotate(source, rotated, RotateFlags.Rotate90Counterclockwise); break;
+            default: throw new ArgumentOutOfRangeException(nameof(rotationDegrees));
+        }
         var rectangle = new Rect(
             (int)Math.Floor(rotated.Width * crop.Left),
             (int)Math.Floor(rotated.Height * crop.Top),
@@ -41,21 +62,6 @@ public sealed class ScreenshotPreprocessor
         rectangle.Width = Math.Min(rectangle.Width, rotated.Width - rectangle.X);
         rectangle.Height = Math.Min(rectangle.Height, rotated.Height - rectangle.Y);
         using var cropped = new Mat(rotated, rectangle);
-        using var gray = new Mat();
-        Cv2.CvtColor(cropped, gray, ColorConversionCodes.BGR2GRAY);
-        if (Cv2.Mean(gray).Val0 < 128) Cv2.BitwiseNot(gray, gray);
-        Cv2.ImWrite(cachePath, gray);
-    }
-
-    private static void Rotate(Mat source, Mat destination, int rotationDegrees)
-    {
-        switch (rotationDegrees)
-        {
-            case 0: source.CopyTo(destination); break;
-            case 90: Cv2.Rotate(source, destination, RotateFlags.Rotate90Clockwise); break;
-            case 180: Cv2.Rotate(source, destination, RotateFlags.Rotate180); break;
-            case 270: Cv2.Rotate(source, destination, RotateFlags.Rotate90Counterclockwise); break;
-            default: throw new ArgumentOutOfRangeException(nameof(rotationDegrees));
-        }
+        return cropped.Clone();
     }
 }

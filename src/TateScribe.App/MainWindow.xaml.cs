@@ -574,7 +574,8 @@ public partial class MainWindow : Window
                 CoverImagePath = settings.CoverPath,
             };
             var exporter = new DendenExportService();
-            var dendenIssues = exporter.Inspect(preparation.Document, options);
+            var dendenPlan = exporter.Prepare(preparation.Document, options);
+            var dendenIssues = dendenPlan.Issues;
             var outputIssues = Directory.Exists(destination) || File.Exists(destination)
                 ?
                 new[]
@@ -593,8 +594,7 @@ public partial class MainWindow : Window
                     .ToArray(),
             };
             if (!ConfirmExport(preflight, "でんでん用データ")) return;
-            await exporter.ExportAsync(
-                preparation.Document, options, destination, CancellationToken.None);
+            await exporter.ExportAsync(dendenPlan, destination, CancellationToken.None);
             MessageBox.Show(this,
                 $"でんでんコンバーター用データを出力しました。EPUB・ZIPは作成していません。{Environment.NewLine}{destination}",
                 "TateScribe", MessageBoxButton.OK, MessageBoxImage.Information);
