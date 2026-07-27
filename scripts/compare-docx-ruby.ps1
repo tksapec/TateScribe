@@ -2,7 +2,9 @@
 param(
     [Parameter(Mandatory, Position = 0)]
     [ValidateNotNullOrEmpty()]
-    [string[]]$Path
+    [string[]]$Path,
+    [Parameter(ValueFromRemainingArguments = $true)]
+    [string[]]$AdditionalPath
 )
 
 Set-StrictMode -Version Latest
@@ -67,9 +69,10 @@ function Read-ZipXml {
 }
 
 $missingFile = $false
-foreach ($docxPath in $Path) {
+$inputPaths = @($Path) + @($AdditionalPath | Where-Object { $null -ne $_ })
+foreach ($docxPath in $inputPaths) {
     if (-not [System.IO.File]::Exists($docxPath)) {
-        Write-Error "DOCX file was not found: $docxPath"
+        Write-Error "DOCX file was not found: $docxPath" -ErrorAction Continue
         $missingFile = $true
         continue
     }

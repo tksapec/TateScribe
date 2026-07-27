@@ -18,4 +18,10 @@ public sealed class WordRubyMetricsTests
     [InlineData("3", true)]
     public void Options_validate_word_offset(string value, bool valid) =>
         Assert.Equal(valid, DocxRubyOptions.TryCreate(value, out _, out _));
+
+    [Theory]
+    [InlineData(-1)]
+    [InlineData(21)]
+    public void Options_constructor_rejects_offsets_outside_word_range(int wordOffsetPoints) =>
+        Assert.Throws<ArgumentOutOfRangeException>(() => new DocxRubyOptions(wordOffsetPoints));
 }

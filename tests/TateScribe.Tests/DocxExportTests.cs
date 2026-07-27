@@ -97,6 +97,34 @@ public sealed class DocxExportTests : IDisposable
     }
 
     [Fact]
+    public async Task Ruby_diagnostic_reports_every_missing_docx_path()
+    {
+        var firstMissingPath = Path.Combine(Path.GetTempPath(), $"TateScribe-missing-{Guid.NewGuid():N}.docx");
+        var secondMissingPath = Path.Combine(Path.GetTempPath(), $"TateScribe-missing-{Guid.NewGuid():N}.docx");
+        var startInfo = new ProcessStartInfo("powershell.exe")
+        {
+            UseShellExecute = false,
+            RedirectStandardOutput = true,
+            RedirectStandardError = true,
+        };
+        startInfo.ArgumentList.Add("-NoProfile");
+        startInfo.ArgumentList.Add("-File");
+        startInfo.ArgumentList.Add(Path.Combine(FindRepositoryRoot(), "scripts", "compare-docx-ruby.ps1"));
+        startInfo.ArgumentList.Add("-Path");
+        startInfo.ArgumentList.Add(firstMissingPath);
+        startInfo.ArgumentList.Add(secondMissingPath);
+
+        using var process = Process.Start(startInfo)!;
+        await process.StandardOutput.ReadToEndAsync();
+        var error = await process.StandardError.ReadToEndAsync();
+        await process.WaitForExitAsync();
+
+        Assert.Equal(1, process.ExitCode);
+        Assert.Contains(Path.GetFileName(firstMissingPath), error, StringComparison.Ordinal);
+        Assert.Contains(Path.GetFileName(secondMissingPath), error, StringComparison.Ordinal);
+    }
+
+    [Fact]
     public async Task Export_writes_section_properties_for_standard_docx_renderers()
     {
         var exporter = new OpenXmlDocumentExporter();
