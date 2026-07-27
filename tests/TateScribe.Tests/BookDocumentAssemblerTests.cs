@@ -126,6 +126,65 @@ public sealed class BookDocumentAssemblerTests
             paragraph => Assert.Equal((ExportStyle.Heading1, DocumentElementRole.ChapterTitle, "第一章"), (paragraph.Style, paragraph.Role, paragraph.Text)),
             paragraph => Assert.Equal((ExportStyle.Normal, DocumentElementRole.BodyParagraph, "次ページ本文"), (paragraph.Style, paragraph.Role, paragraph.Text)));
     }
+
+    [Fact]
+    public void Assemble_separates_a_chapter_page_after_a_direct_join_body_page()
+    {
+        var chapter = BookDocumentAssembler.CreateChapterPageText("Chapter title");
+
+        var document = BookDocumentAssembler.Assemble([
+            new ExportPageText("Previous body", BoundaryJoinType.DirectJoin),
+            new ExportPageText(chapter, BoundaryJoinType.DirectJoin),
+        ]);
+
+        Assert.Collection(document.Paragraphs,
+            paragraph => Assert.Equal(
+                (DocumentElementRole.BodyParagraph, "Previous body"),
+                (paragraph.Role, paragraph.Text)),
+            paragraph => Assert.Equal(
+                (DocumentElementRole.ChapterTitle, "Chapter title"),
+                (paragraph.Role, paragraph.Text)));
+    }
+
+    [Theory]
+    [InlineData(BoundaryJoinType.DirectJoin)]
+    [InlineData(BoundaryJoinType.Uncertain)]
+    public void Source_aware_assembly_matches_standard_and_keeps_a_chapter_owned_by_its_page(
+        BoundaryJoinType joinType)
+    {
+        var bodyPage = Guid.NewGuid();
+        var chapterPage = Guid.NewGuid();
+        var chapter = BookDocumentAssembler.CreateChapterPageText("Chapter title");
+
+        var expected = BookDocumentAssembler.Assemble([
+            new ExportPageText("Previous body", joinType),
+            new ExportPageText(chapter, BoundaryJoinType.DirectJoin),
+        ]);
+        var result = BookDocumentAssembler.AssembleWithSourceSpans([
+            new ExportSourcePageText(
+                bodyPage, "0001", "Previous body", joinType),
+            new ExportSourcePageText(
+                chapterPage, "0002", chapter, BoundaryJoinType.DirectJoin),
+        ]);
+
+        Assert.Equal(expected.Paragraphs, result.Select(item => item.Paragraph));
+        Assert.Collection(result,
+            paragraph =>
+            {
+                Assert.Equal(
+                    (DocumentElementRole.BodyParagraph, "Previous body"),
+                    (paragraph.Paragraph.Role, paragraph.Paragraph.Text));
+                Assert.Equal(bodyPage, Assert.Single(paragraph.SourceSpans).PageId);
+            },
+            paragraph =>
+            {
+                Assert.Equal(
+                    (DocumentElementRole.ChapterTitle, "Chapter title"),
+                    (paragraph.Paragraph.Role, paragraph.Paragraph.Text));
+                Assert.Equal(chapterPage, Assert.Single(paragraph.SourceSpans).PageId);
+            });
+    }
+
     [Fact]
     public void CreateChapterPageText_uses_only_the_first_line_as_the_structural_title()
     {

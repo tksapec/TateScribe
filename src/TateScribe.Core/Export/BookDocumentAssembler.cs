@@ -130,6 +130,11 @@ public static partial class BookDocumentAssembler
                 || pageText.EndsWith('\n')
                 || pages[index + 1].Text.StartsWith('\n'))
                 continue;
+            if (StartsWithStructureMarker(pages[index + 1].Text))
+            {
+                builder.Append('\n');
+                continue;
+            }
             switch (page.JoinToNext)
             {
                 case BoundaryJoinType.SpaceJoin:
@@ -165,6 +170,11 @@ public static partial class BookDocumentAssembler
                 || pageText.EndsWith('\n')
                 || pages[index + 1].Text.StartsWith('\n'))
                 continue;
+            if (StartsWithStructureMarker(pages[index + 1].Text))
+            {
+                Append("\n", page.PageId, page.PageMarker);
+                continue;
+            }
             switch (page.JoinToNext)
             {
                 case BoundaryJoinType.SpaceJoin:
@@ -252,12 +262,22 @@ public static partial class BookDocumentAssembler
     {
         var line = text.Trim();
         return !line.Contains('\n')
-            && line.EndsWith("]]", StringComparison.Ordinal)
-            && (line.StartsWith("[[CHAPTER:", StringComparison.Ordinal)
-                || line.StartsWith("[[TITLE:", StringComparison.Ordinal)
-                || line.StartsWith("[[SECTION_TITLE:", StringComparison.Ordinal)
-                || line.StartsWith("[[SECTION:", StringComparison.Ordinal));
+            && IsStructureMarkerLine(line);
     }
+
+    private static bool StartsWithStructureMarker(string text)
+    {
+        var lineEnd = text.IndexOfAny(['\r', '\n']);
+        var firstLine = lineEnd < 0 ? text : text[..lineEnd];
+        return IsStructureMarkerLine(firstLine.Trim());
+    }
+
+    private static bool IsStructureMarkerLine(string line) =>
+        line.EndsWith("]]", StringComparison.Ordinal)
+        && (line.StartsWith("[[CHAPTER:", StringComparison.Ordinal)
+            || line.StartsWith("[[TITLE:", StringComparison.Ordinal)
+            || line.StartsWith("[[SECTION_TITLE:", StringComparison.Ordinal)
+            || line.StartsWith("[[SECTION:", StringComparison.Ordinal));
 
     [GeneratedRegex(
         @"^(第.{1,12}[章話部巻]|序章|終章|プロローグ|エピローグ)$",

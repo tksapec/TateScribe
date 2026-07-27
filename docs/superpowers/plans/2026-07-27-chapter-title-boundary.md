@@ -8,6 +8,8 @@
 
 **Tech Stack:** .NET 8, C#, xUnit, Open XML SDK.
 
+**Status:** Implemented and verified on 2026-07-27.
+
 ## Global Constraints
 
 - Do not modify stored proofreading text or page-boundary settings.

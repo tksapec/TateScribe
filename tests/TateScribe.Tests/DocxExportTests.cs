@@ -2,6 +2,7 @@ using DocumentFormat.OpenXml.Packaging;
 using DocumentFormat.OpenXml.Wordprocessing;
 using DocumentFormat.OpenXml.Validation;
 using TateScribe.Core.Export;
+using TateScribe.Core.Proofreading;
 using TateScribe.Infrastructure.Export;
 
 namespace TateScribe.Tests;
@@ -87,6 +88,39 @@ public sealed class DocxExportTests : IDisposable
 
         using var word = WordprocessingDocument.Open(_path, false);
         Assert.Contains("pageBreakBefore", word.MainDocumentPart!.Document.OuterXml, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public async Task Export_recognizes_a_chapter_after_a_direct_join_body_page()
+    {
+        var chapter = BookDocumentAssembler.CreateChapterPageText("Chapter title");
+        var document = BookDocumentAssembler.Assemble([
+            new ExportPageText("Previous body", BoundaryJoinType.DirectJoin),
+            new ExportPageText(chapter, BoundaryJoinType.DirectJoin),
+        ]) with
+        {
+            PageBreakBeforeChapters = true,
+        };
+
+        await new OpenXmlDocumentExporter().ExportAsync(
+            document, _path, CancellationToken.None);
+
+        using var word = WordprocessingDocument.Open(_path, false);
+        var xml = word.MainDocumentPart!.Document.OuterXml;
+        var paragraphs = word.MainDocumentPart.Document.Body!
+            .Elements<Paragraph>()
+            .ToArray();
+        Assert.Equal(2, paragraphs.Length);
+        Assert.Equal("Previous body", paragraphs[0].InnerText);
+        Assert.Equal("Chapter title", paragraphs[1].InnerText);
+        Assert.Equal(
+            "Heading1",
+            paragraphs[1].ParagraphProperties!.ParagraphStyleId!.Val!.Value);
+        var chapterProperties = paragraphs[1].ParagraphProperties;
+        Assert.NotNull(chapterProperties);
+        Assert.NotNull(chapterProperties.GetFirstChild<PageBreakBefore>());
+        Assert.DoesNotContain("[[CHAPTER:", xml, StringComparison.Ordinal);
+        Assert.Empty(new OpenXmlValidator().Validate(word));
     }
 
     [Fact]
