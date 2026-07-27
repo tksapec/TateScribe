@@ -286,6 +286,29 @@ public sealed class MainWindowLayoutTests
     }
 
     [Fact]
+    public void Word_ruby_and_review_controls_expose_explicit_safe_workflow_boundaries()
+    {
+        var root = FindRepositoryRoot();
+        var main = File.ReadAllText(Path.Combine(root, "src", "TateScribe.App", "MainWindow.xaml"));
+        var options = File.ReadAllText(Path.Combine(root, "src", "TateScribe.Core", "Export", "DocxRubyOptions.cs"));
+        var review = File.ReadAllText(Path.Combine(root, "src", "TateScribe.App", "RubyReviewWindow.xaml"));
+        var source = File.ReadAllText(Path.Combine(root, "src", "TateScribe.App", "RubyReviewWindow.xaml.cs"));
+
+        Assert.Contains("Text=\"3\"", main, StringComparison.Ordinal);
+        Assert.Contains("WordOffsetPoints is < 0 or > 20", options, StringComparison.Ordinal);
+        Assert.Contains("Click=\"AcceptSelected\"", review, StringComparison.Ordinal);
+        Assert.Contains("Click=\"RejectSelected\"", review, StringComparison.Ordinal);
+        Assert.Contains("Click=\"ConfirmImageBased\"", review, StringComparison.Ordinal);
+        Assert.Contains("Click=\"ConfirmTextBased\"", review, StringComparison.Ordinal);
+        Assert.Contains("AnnotationGrid.SelectedItems.Count", source, StringComparison.Ordinal);
+        Assert.Contains("summary.Examined", source, StringComparison.Ordinal);
+        Assert.Contains("summary.NewlyConfirmed", source, StringComparison.Ordinal);
+        Assert.Contains("summary.AlreadyConfirmed", source, StringComparison.Ordinal);
+        Assert.Contains("summary.WrongSource", source, StringComparison.Ordinal);
+        Assert.Contains("summary.Excluded", source, StringComparison.Ordinal);
+    }
+
+    [Fact]
     public void Fresh_ruby_import_revalidates_after_assigning_annotation_ids()
     {
         var root = FindRepositoryRoot();

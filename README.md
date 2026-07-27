@@ -21,6 +21,14 @@ Windows向けの、縦書き電子書籍スクリーンショットを編集可�
 
 DOCXは横書きです。元画像の縦書き配置やスクリーンショット境界は再現せず、画像境界による改ページも作りません。
 
+## Word ruby compatibility and review
+
+The DOCX Word ruby offset uses a **3pt default** and accepts whole numbers from 0 through 20. TateScribe calculates the XML raise provisionally from the ruby font size plus the selected offset, so a changed offset requires a new DOCX export. The generated XML is diagnostic evidence, not a substitute for opening the exported file in Word: manual Word visual verification and B/C comparison remain required when Word-saved reference files are available.
+
+Ruby review supports Ctrl/Shift extended selection, and Ctrl+Enter confirms the selected rows after pending edits commit. The individual Confirm and Reject buttons affect only the current selection; rejection is button-only, never a Delete-key shortcut. Image-based and text-based bulk confirmation remain separate. Their result dialog reports examined, newly confirmed, already confirmed, wrong-source, and excluded counts, plus each exclusion reason. The selection summary always includes the selected-count.
+
+This compatibility and review work adds no SQLite schema migration and does not create a Release ZIP.
+
 ## 開発時の実行
 
 ```powershell

@@ -15,6 +15,14 @@
 13. Enter metadata and export the Denden Converter folder. Enable `挿絵ページを含める` only when `Illustration` pages should be included. Open its `upload` folder and select every file inside it together when uploading; never select the root `README.txt`.
 14. Use Denden Converter to create EPUB outside TateScribe.
 
+## Word ruby offset and review selection
+
+The Word ruby offset has a 3pt default and accepts whole numbers from 0 through 20. TateScribe calculates the raise provisionally from the ruby font size and this offset; change the offset, then re-export the DOCX. Inspect the re-exported document in Word. XML diagnostics do not replace manual Word visual verification, and B/C comparison remains pending until Word-saved reference files are available.
+
+In the ruby grid, use Ctrl/Shift for extended selection. Ctrl+Enter confirms the selected rows after pending edits are committed. The Confirm and Reject buttons operate only on those selected rows; rejection is button-only and has no Delete-key shortcut. Image-based and text-based bulk confirmation are deliberately separate. Each bulk result reports examined, newly confirmed, already confirmed, wrong-source, and excluded counts, with an exclusion-reason breakdown. The summary includes the selected count.
+
+This workflow requires no SQLite schema migration and never creates a Release ZIP.
+
 If the body changes after a ruby package was exported, TateScribe marks the associated ruby stale. Export a new package and review the new positions; TateScribe does not reattach ruby by blind text search.
 
 `保存済みルビ候補を確認` opens the ruby batch history. It initially selects the newest batch that actually contains annotations, even when a newer package export has not been imported. Select an older annotated batch to review it. The table shows exported UTC, batch ID, document hash, policy, annotation/status counts, unresolved count, and whether the batch belongs to the current document.

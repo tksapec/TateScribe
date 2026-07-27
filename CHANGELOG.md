@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Added a configurable Word ruby offset with a 3pt default and 0 through 20 validation, provisional DOCX raise metrics, normalized XML diagnostics, and an explicit manual Word visual-verification boundary. Ruby review now documents Ctrl/Shift selection, Ctrl+Enter confirmation, button-only rejection, selected-count summary, and separate bulk-result categories. This adds no SQLite schema migration and no Release ZIP.
+
 - Added separate ChatGPT text-proofreading and ruby-annotation prompts from one provider.
 - Added folder-first ruby review packages and strict version 1 JSON validation.
 - Added SQLite schema version 8 for structured document snapshots, provenance spans, stable paragraphs, ruby batches/evidence, proposals, history, unresolved evidence, and original automatic OCR roles.

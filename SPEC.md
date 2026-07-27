@@ -27,6 +27,10 @@ Export preparation is read-only. DOCX/Denden confirmation cancellation and outpu
 
 The review window revalidates edited ranges, readings, and statuses before saving. Errors keep it open; a new warning on a Confirmed item requires explicit acknowledgement. Saved-batch history initially selects the newest batch with annotations, permits opening older annotated batches, and displays status counts plus whether each batch belongs to the current document.
 
+DOCX Word ruby offset defaults to 3pt and accepts whole numbers from 0 through 20. The calculated raise is provisional (ruby half-points plus twice the selected offset); changing it requires a re-export. Normalized XML diagnostics support comparison but do not replace manual Word visual verification or a B/C comparison against Word-saved references. The review grid uses Ctrl/Shift extended selection and Ctrl+Enter to confirm selected rows. Individual rejection is button-only; image/text bulk confirmation stays separate and reports examined, newly confirmed, already confirmed, wrong-source, excluded, and per-reason exclusion results. The review summary includes the selected count.
+
+This change requires no SQLite schema migration and creates no Release ZIP.
+
 The authoritative model is a `StructuredDocument` with stable persisted paragraph IDs, roles, ordered text/ruby inlines, text hashes, and source spans. Applying ruby must not change the plain body text.
 
 ## Output

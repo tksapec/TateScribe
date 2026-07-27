@@ -24,4 +24,29 @@ public sealed class WordRubyMetricsTests
     [InlineData(21)]
     public void Options_constructor_rejects_offsets_outside_word_range(int wordOffsetPoints) =>
         Assert.Throws<ArgumentOutOfRangeException>(() => new DocxRubyOptions(wordOffsetPoints));
+
+    [Fact]
+    public void Documentation_names_the_manual_Word_visual_verification_boundary()
+    {
+        var root = FindRepositoryRoot();
+
+        Assert.Contains("3pt default", File.ReadAllText(Path.Combine(root, "README.md")), StringComparison.Ordinal);
+        Assert.Contains("0 through 20", File.ReadAllText(Path.Combine(root, "USER_GUIDE.md")), StringComparison.Ordinal);
+        Assert.Contains("Ctrl/Shift", File.ReadAllText(Path.Combine(root, "USER_GUIDE.md")), StringComparison.Ordinal);
+        Assert.Contains("Ctrl+Enter", File.ReadAllText(Path.Combine(root, "USER_GUIDE.md")), StringComparison.Ordinal);
+        Assert.Contains("button-only rejection", File.ReadAllText(Path.Combine(root, "TEST_PLAN.md")), StringComparison.Ordinal);
+        Assert.Contains("manual Word visual verification", File.ReadAllText(Path.Combine(root, "TEST_PLAN.md")), StringComparison.Ordinal);
+        Assert.Contains("no SQLite schema migration", File.ReadAllText(Path.Combine(root, "SPEC.md")), StringComparison.Ordinal);
+        Assert.Contains("provisional", File.ReadAllText(Path.Combine(root, "ARCHITECTURE.md")), StringComparison.Ordinal);
+        Assert.Contains("manual Word visual verification", File.ReadAllText(Path.Combine(root, "docs", "ADR-0001-structured-ruby-boundary.md")), StringComparison.Ordinal);
+    }
+
+    private static string FindRepositoryRoot()
+    {
+        var directory = new DirectoryInfo(AppContext.BaseDirectory);
+        while (directory is not null && !File.Exists(Path.Combine(directory.FullName, "TateScribe.sln")))
+            directory = directory.Parent;
+
+        return directory?.FullName ?? throw new DirectoryNotFoundException("Repository root was not found.");
+    }
 }
