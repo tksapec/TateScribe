@@ -21,8 +21,9 @@
         <StackPanel>
           <Button Margin="0,0,0,8" Padding="12,6" Click="CreateProject">プロジェクトを作成／開く</Button>
           <Button Margin="0,0,0,12" Padding="12,6" Click="ImportImages">画像を追加</Button>
-          <Button x:Name="RunOcrButton" Margin="0,0,0,8" Padding="12,6" Click="RunOcr">OCRを実行</Button>
-          <Button x:Name="RunAllOcrButton" Margin="0,0,0,8" Padding="12,6" Click="RunAllOcr">全ページをOCR</Button>
+          <Button x:Name="RunOcrButton" Margin="0,0,0,8" Padding="12,6" Click="RunSelectedOcr">選択ページをOCR</Button>
+          <Button x:Name="ResumeOcrButton" Margin="0,0,0,8" Padding="12,6" Click="ResumeIncompleteOcr">未完了ページから再開</Button>
+          <Button x:Name="RunAllOcrButton" Margin="0,0,0,8" Padding="12,6" Click="ReprocessAllOcr">全ページを再OCR</Button>
           <Button x:Name="CancelOcrButton" Margin="0,0,0,12" Padding="12,6" Click="CancelOcr" IsEnabled="False">OCRを中止</Button>
 
           <GroupBox Header="ChatGPTとの受け渡し" Margin="0,0,0,10" Padding="6">

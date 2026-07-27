@@ -156,6 +156,25 @@ public sealed class MainWindowLayoutTests
     }
 
     [Fact]
+    public void Main_window_exposes_resumable_ocr_actions_and_their_handlers()
+    {
+        var root = FindRepositoryRoot();
+        var xaml = File.ReadAllText(Path.Combine(root, "src", "TateScribe.App", "MainWindow.xaml"));
+        var source = File.ReadAllText(Path.Combine(root, "src", "TateScribe.App", "MainWindow.xaml.cs"));
+
+        Assert.Contains("\u9078\u629e\u30da\u30fc\u30b8\u3092OCR", xaml, StringComparison.Ordinal);
+        Assert.Contains("\u672a\u5b8c\u4e86\u30da\u30fc\u30b8\u304b\u3089\u518d\u958b", xaml, StringComparison.Ordinal);
+        Assert.Contains("\u5168\u30da\u30fc\u30b8\u3092\u518dOCR", xaml, StringComparison.Ordinal);
+        Assert.Contains("OCR\u3092\u4e2d\u6b62", xaml, StringComparison.Ordinal);
+        Assert.Contains("Click=\"RunSelectedOcr\"", xaml, StringComparison.Ordinal);
+        Assert.Contains("Click=\"ResumeIncompleteOcr\"", xaml, StringComparison.Ordinal);
+        Assert.Contains("Click=\"ReprocessAllOcr\"", xaml, StringComparison.Ordinal);
+        Assert.Contains("RunSelectedOcr", source, StringComparison.Ordinal);
+        Assert.Contains("ResumeIncompleteOcr", source, StringComparison.Ordinal);
+        Assert.Contains("ReprocessAllOcr", source, StringComparison.Ordinal);
+    }
+
+    [Fact]
     public void Ruby_review_revalidates_saved_and_live_edited_candidates()
     {
         var root = FindRepositoryRoot();

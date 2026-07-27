@@ -64,6 +64,7 @@ public partial class MainWindow : Window
             RefreshPages();
             var missingSourceCount = _pages.Count(page => !File.Exists(page.SourcePath));
             if (missingSourceCount > 0) ReviewStatus.Text = $"要確認: 元画像が見つからないページが {missingSourceCount} 件あります。";
+            else ShowRemainingProcessingCount();
         }
     }
 
@@ -639,23 +640,36 @@ public partial class MainWindow : Window
         new ChatGptProofreadingPromptWindow { Owner = this }.ShowDialog();
     }
 
-    private async void RunOcr(object sender, RoutedEventArgs e)
+    private async void RunSelectedOcr(object sender, RoutedEventArgs e)
     {
         if (_projectDirectory is null || PageList.SelectedItem is not ProjectPage selected) return;
-        await RunOcrAsync([selected]);
+        await RunOcrAsync(OcrRunMode.Selected, [selected]);
     }
 
-    private async void RunAllOcr(object sender, RoutedEventArgs e)
+    private async void ResumeIncompleteOcr(object sender, RoutedEventArgs e)
     {
         if (_projectDirectory is null || _pages.Count == 0) return;
-        await RunOcrAsync(_pages.OrderBy(page => page.SortOrder).ToArray());
+        await RunOcrAsync(OcrRunMode.ResumeIncomplete, _pages);
     }
 
-    private async Task RunOcrAsync(IReadOnlyList<ProjectPage> pages)
+    private async void ReprocessAllOcr(object sender, RoutedEventArgs e)
+    {
+        if (_projectDirectory is null || _pages.Count == 0) return;
+        await RunOcrAsync(OcrRunMode.ReprocessAll, _pages);
+    }
+
+    private async Task RunOcrAsync(OcrRunMode mode, IReadOnlyList<ProjectPage> candidatePages)
     {
         var projectDirectory = _projectDirectory;
         if (projectDirectory is null) return;
         if (_ocrCancellation is not null) return;
+        var plan = OcrRunPlanner.Plan(mode, candidatePages);
+        if (plan.Targets.Count == 0)
+        {
+            ReviewStatus.Text = "OCR対象のページはありません。";
+            return;
+        }
+        if (!ConfirmOcrRun(plan, mode)) return;
         var python = ResolveRuntimePath("ocr-runtime", "Scripts", "python.exe");
         var workerScript = ResolveRuntimePath("ocr-worker", "worker.py");
         if (!File.Exists(python) || !File.Exists(workerScript))
@@ -667,12 +681,13 @@ public partial class MainWindow : Window
         {
             _ocrCancellation = new CancellationTokenSource();
             RunOcrButton.IsEnabled = false;
+            ResumeOcrButton.IsEnabled = false;
             RunAllOcrButton.IsEnabled = false;
             CancelOcrButton.IsEnabled = true;
             var progress = new Progress<(int Current, int Total, string FileName)>(value =>
                 ReviewStatus.Text = $"OCR実行中: {value.Current}/{value.Total} {value.FileName}");
             var result = await new OcrOrchestrationService().RunAsync(
-                projectDirectory, pages, python, workerScript, progress, _ocrCancellation.Token);
+                projectDirectory, plan.Targets, python, workerScript, progress, _ocrCancellation.Token);
             if (PageList.SelectedItem is ProjectPage selected)
             {
                 var outcome = result.Pages.SingleOrDefault(page => page.PageId == selected.Id);
@@ -683,8 +698,8 @@ public partial class MainWindow : Window
                 }
             }
             ReviewStatus.Text = result.Failures.Count == 0
-                ? $"OCR完了: {pages.Count} ページ"
-                : $"OCR完了: {result.SucceededCount}/{pages.Count} ページ（失敗: {string.Join(", ", result.Failures.Select(failure => $"{failure.FileName}: {failure.Stage} {failure.Message}"))}）";
+                ? $"OCR完了: {plan.Targets.Count} ページ"
+                : $"OCR完了: {result.SucceededCount}/{plan.Targets.Count} ページ（失敗: {string.Join(", ", result.Failures.Select(failure => $"{failure.FileName}: {failure.Stage} {failure.Message}"))}）";
             await using var repository = await SqliteProjectRepository.CreateAsync(projectDirectory, CancellationToken.None);
             _pages = (await repository.LoadPagesAsync(CancellationToken.None)).ToList();
             RefreshPages();
@@ -706,9 +721,33 @@ public partial class MainWindow : Window
             _ocrCancellation?.Dispose();
             _ocrCancellation = null;
             RunOcrButton.IsEnabled = true;
+            ResumeOcrButton.IsEnabled = true;
             RunAllOcrButton.IsEnabled = true;
             CancelOcrButton.IsEnabled = false;
         }
+    }
+
+    private bool ConfirmOcrRun(OcrRunPlan plan, OcrRunMode mode)
+    {
+        if (mode == OcrRunMode.Selected) return true;
+        var summary = $"OCR対象: {plan.Targets.Count} ページ\n" +
+                      $"未処理: {plan.NotProcessedTargetCount}、失敗: {plan.FailedTargetCount}、処理中: {plan.ProcessingTargetCount}\n" +
+                      $"スキップ: 完了 {plan.CompletedSkippedCount}、要確認 {plan.ReviewRequiredSkippedCount}、除外 {plan.ExcludedSkippedCount}";
+        if (mode == OcrRunMode.ReprocessAll)
+            summary = "全ページを再OCRすると、既存のOCR結果が新しい解析結果で更新され、校正済み本文はStaleになります。\n\n" + summary;
+        return MessageBox.Show(
+            this,
+            summary,
+            mode == OcrRunMode.ReprocessAll ? "全ページを再OCR" : "未完了ページから再開",
+            MessageBoxButton.YesNo,
+            MessageBoxImage.Warning) == MessageBoxResult.Yes;
+    }
+
+    private void ShowRemainingProcessingCount()
+    {
+        var remaining = _pages.Count(page => page.OcrStatus == OcrStatus.Processing);
+        if (remaining > 0)
+            ReviewStatus.Text = $"前回のOCR処理中のまま残っているページが {remaining} 件あります。未完了ページから再開できます。";
     }
 
     private void CancelOcr(object sender, RoutedEventArgs e) => _ocrCancellation?.Cancel();
