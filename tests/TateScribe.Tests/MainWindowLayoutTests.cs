@@ -1,3 +1,5 @@
+using System.Xml.Linq;
+
 namespace TateScribe.Tests;
 
 public sealed class MainWindowLayoutTests
@@ -79,10 +81,44 @@ public sealed class MainWindowLayoutTests
     public void Proofreading_import_window_exposes_before_after_diff_and_bulk_selection()
     {
         var root = FindRepositoryRoot();
-        var xaml = File.ReadAllText(Path.Combine(root, "src", "TateScribe.App", "ProofreadingImportWindow.xaml"));
+        var path = Path.Combine(root, "src", "TateScribe.App", "ProofreadingImportWindow.xaml");
+        var xaml = File.ReadAllText(path);
+        var document = XDocument.Load(path);
+        XNamespace presentation = "http://schemas.microsoft.com/winfx/2006/xaml/presentation";
+        XNamespace x = "http://schemas.microsoft.com/winfx/2006/xaml";
+        var rootGrid = Assert.Single(document.Root!.Elements(presentation + "Grid"));
+        var rows = rootGrid.Element(presentation + "Grid.RowDefinitions")!
+            .Elements(presentation + "RowDefinition")
+            .Select(row => row.Attribute("Height")?.Value)
+            .ToArray();
+        var summaryScrollViewer = rootGrid.Elements(presentation + "ScrollViewer")
+            .Single(element => element.Attribute(x + "Name")?.Value == "SummaryScrollViewer");
+        var summary = Assert.Single(summaryScrollViewer.Elements(presentation + "TextBlock"));
+        var candidateGrid = rootGrid.Elements(presentation + "DataGrid")
+            .Single(element => element.Attribute(x + "Name")?.Value == "CandidateGrid");
+        var footer = rootGrid.Elements(presentation + "StackPanel")
+            .Single(element => element.Attribute("Grid.Row")?.Value == "3");
 
         Assert.Contains("x:Name=\"SelectAllButton\"", xaml, StringComparison.Ordinal);
         Assert.Contains("x:Name=\"ClearAllButton\"", xaml, StringComparison.Ordinal);
+        Assert.Collection(
+            rows,
+            row => Assert.Equal("Auto", row),
+            row => Assert.Equal("Auto", row),
+            row => Assert.Equal("*", row),
+            row => Assert.Equal("Auto", row));
+        Assert.Equal("120", summaryScrollViewer.Attribute("MaxHeight")?.Value);
+        Assert.Equal("Auto", summaryScrollViewer.Attribute("VerticalScrollBarVisibility")?.Value);
+        Assert.Equal("True", summaryScrollViewer.Attribute("Focusable")?.Value);
+        Assert.Equal("校正結果の検証詳細", summaryScrollViewer.Attribute("AutomationProperties.Name")?.Value);
+        Assert.Equal("Summary", summary.Attribute(x + "Name")?.Value);
+        Assert.Equal("2", candidateGrid.Attribute("Grid.Row")?.Value);
+        Assert.Contains(
+            footer.Elements(presentation + "Button"),
+            element => element.Attribute(x + "Name")?.Value == "CancelImportButton");
+        Assert.Contains(
+            footer.Elements(presentation + "Button"),
+            element => element.Attribute(x + "Name")?.Value == "AcceptImportButton");
         Assert.Contains("x:Name=\"WarningsOnly\"", xaml, StringComparison.Ordinal);
         Assert.Contains("{Binding BeforeText, Mode=OneWay}", xaml, StringComparison.Ordinal);
         Assert.Contains("{Binding AfterText, Mode=OneWay}", xaml, StringComparison.Ordinal);

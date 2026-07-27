@@ -9,7 +9,15 @@
       <RowDefinition Height="*" />
       <RowDefinition Height="Auto" />
     </Grid.RowDefinitions>
-    <TextBlock x:Name="Summary" TextWrapping="Wrap" Margin="0,0,0,12" />
+    <ScrollViewer x:Name="SummaryScrollViewer"
+                  MaxHeight="120"
+                  Focusable="True"
+                  AutomationProperties.Name="校正結果の検証詳細"
+                  VerticalScrollBarVisibility="Auto"
+                  HorizontalScrollBarVisibility="Disabled"
+                  Margin="0,0,0,12">
+      <TextBlock x:Name="Summary" TextWrapping="Wrap" />
+    </ScrollViewer>
     <StackPanel Grid.Row="1" Orientation="Horizontal" Margin="0,0,0,8">
       <Button x:Name="SelectAllButton" Padding="10,4" Margin="0,0,6,0" Click="SelectAll">採用可能ページを全選択</Button>
       <Button x:Name="ClearAllButton" Padding="10,4" Margin="0,0,12,0" Click="ClearAll">全解除</Button>
@@ -72,8 +80,8 @@
       </DataGrid.Columns>
     </DataGrid>
     <StackPanel Grid.Row="3" Orientation="Horizontal" HorizontalAlignment="Right" Margin="0,12,0,0">
-      <Button Padding="12,6" Margin="0,0,8,0" Click="Cancel">キャンセル（保存しない）</Button>
-      <Button Padding="12,6" IsDefault="True" Click="Accept">選択ページを保存</Button>
+      <Button x:Name="CancelImportButton" Padding="12,6" Margin="0,0,8,0" Click="Cancel">キャンセル（保存しない）</Button>
+      <Button x:Name="AcceptImportButton" Padding="12,6" IsDefault="True" Click="Accept">選択ページを保存</Button>
     </StackPanel>
   </Grid>
 </Window>
