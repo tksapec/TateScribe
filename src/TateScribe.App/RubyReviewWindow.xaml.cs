@@ -1,6 +1,7 @@
 using System.Collections.ObjectModel;
 using System.Windows;
 using System.Windows.Controls;
+using System.Windows.Input;
 using TateScribe.Core.Ruby;
 
 namespace TateScribe.App;
@@ -12,6 +13,8 @@ public partial class RubyReviewWindow : Window
     private readonly Func<RubyImportDocument, RubyImportPreview>? validateReviewed;
     private readonly IReadOnlyList<RubyOcrCandidate> ocrCandidates;
     private readonly ObservableCollection<RubyAnnotationView> annotations;
+    private readonly int unresolvedCount;
+    private RubyAnnotationView? focusedAnnotation;
 
     public RubyReviewWindow(
         StructuredDocument document,
@@ -23,6 +26,7 @@ public partial class RubyReviewWindow : Window
         InitializeComponent();
         if (preview.Result is null) throw new ArgumentException("ルビ候補がありません。", nameof(preview));
         source = new RubyImportResultSource(document, preview.Result, preview.Issues);
+        unresolvedCount = preview.Result.Unresolved.Count;
         this.ocrCandidates = ocrCandidates ?? [];
         this.showPage = showPage;
         this.validateReviewed = validateReviewed;
@@ -61,18 +65,30 @@ public partial class RubyReviewWindow : Window
             PageMarkers = string.Join(", ", item.EvidencePageMarkers),
             item.Reason,
         }).ToArray();
-        SummaryText.Text = $"候補 {annotations.Count} 件、未確定 {preview.Result.Unresolved.Count} 件。本文は読み取り専用です。個別確認後に保存してください。";
+        UpdateSummary();
         AnnotationGrid.SelectedIndex = annotations.Count > 0 ? 0 : -1;
     }
 
     public RubyImportDocument ReviewedDocument => source.Import with
     {
-        Annotations = annotations.Select(view => view.ToProposal()).ToArray(),
+        Annotations = annotations.Select(view => view.ToSnapshot()).ToArray(),
     };
 
     private void AnnotationSelectionChanged(object sender, SelectionChangedEventArgs e)
     {
-        if (AnnotationGrid.SelectedItem is not RubyAnnotationView selected) return;
+        var selected = AnnotationGrid.CurrentItem as RubyAnnotationView;
+        if (selected is null || !AnnotationGrid.SelectedItems.Contains(selected))
+            selected = e.AddedItems.OfType<RubyAnnotationView>().LastOrDefault()
+                ?? AnnotationGrid.SelectedItems.OfType<RubyAnnotationView>().FirstOrDefault();
+        if (selected is null)
+        {
+            focusedAnnotation = null;
+            ParagraphText.Clear();
+            EvidenceText.Clear();
+            UpdateSummary();
+            return;
+        }
+        focusedAnnotation = selected;
         var paragraph = source.Document.Paragraphs.SingleOrDefault(item =>
             string.Equals(item.ParagraphId.ToString("D"), selected.ParagraphId, StringComparison.OrdinalIgnoreCase));
         ParagraphText.Text = paragraph?.PlainText ?? string.Empty;
@@ -80,7 +96,6 @@ public partial class RubyReviewWindow : Window
             && selected.Length >= 1
             && (long)selected.Start + selected.Length <= ParagraphText.Text.Length)
         {
-            ParagraphText.Focus();
             ParagraphText.Select(selected.Start, selected.Length);
         }
         var coordinates = ocrCandidates.Where(candidate =>
@@ -98,9 +113,11 @@ public partial class RubyReviewWindow : Window
             .Select(candidate =>
                 $"OCR座標: {candidate.PageMarker} ({candidate.Left:0.##}, {candidate.Top:0.##})-({candidate.Right:0.##}, {candidate.Bottom:0.##}) OCR信頼度 {candidate.Confidence:0.00} リンク信頼度 {(candidate.LinkConfidence?.ToString("0.00") ?? "未特定")} 親文字候補 {candidate.BaseTextCandidate ?? "未特定"}");
         EvidenceText.Text = $"根拠: {selected.Evidence}{Environment.NewLine}ページ: {selected.PageMarkers}{Environment.NewLine}{string.Join(Environment.NewLine, coordinates)}{Environment.NewLine}{selected.Warning}";
+        UpdateSummary();
     }
 
-    private void AcceptSelected(object sender, RoutedEventArgs e) => SetSelected(RubyAnnotationStatus.Confirmed);
+    private void AcceptSelected(object sender, RoutedEventArgs e) =>
+        SetSelected(RubyAnnotationStatus.Confirmed);
     private void RejectSelected(object sender, RoutedEventArgs e) => SetSelected(RubyAnnotationStatus.Rejected);
 
     private void ConfirmImageBased(object sender, RoutedEventArgs e) =>
@@ -111,39 +128,134 @@ public partial class RubyReviewWindow : Window
 
     private void ConfirmSource(RubySource source)
     {
-        AnnotationGrid.CommitEdit(DataGridEditingUnit.Row, true);
+        CommitPendingEdits();
         var current = ReviewedDocument;
         var validation = validateReviewed?.Invoke(current)
             ?? new RubyImportPreview(current, annotations.SelectMany(item => item.Issues).ToArray());
         RefreshValidationIssues(validation.Issues);
-        AnnotationGrid.Items.Refresh();
-        if (!validation.IsValid) return;
-        foreach (var item in annotations)
+        var validationErrors = validation.Issues.Where(issue => issue.IsError).ToArray();
+        var summary = RubyBulkConfirmationSummary.Create(
+            current.Annotations,
+            source,
+            proposal => validation.Issues
+                .Where(issue => RubyBulkConfirmationPolicy.Matches(issue, proposal))
+                .ToArray(),
+            validationErrors);
+        if (validation.IsValid)
         {
-            var proposal = item.ToProposal();
-            if (RubyBulkConfirmationPolicy.CanConfirm(proposal, source, item.Issues))
-                item.Status = RubyAnnotationStatus.Confirmed;
+            foreach (var item in annotations)
+            {
+                var proposal = item.ToSnapshot();
+                if (RubyBulkConfirmationPolicy.CanConfirm(proposal, source, item.Issues))
+                    item.ApplyProposal(proposal with { Status = RubyAnnotationStatus.Confirmed });
+            }
         }
         AnnotationGrid.Items.Refresh();
+        UpdateSummary();
+        MessageBox.Show(
+            this,
+            FormatBulkOutcome(source, summary),
+            "Ruby bulk confirmation",
+            MessageBoxButton.OK,
+            validationErrors.Length > 0 ? MessageBoxImage.Warning : MessageBoxImage.Information);
     }
 
     private void ShowEvidencePage(object sender, RoutedEventArgs e)
     {
-        if (AnnotationGrid.SelectedItem is RubyAnnotationView selected
+        if (focusedAnnotation is RubyAnnotationView selected
             && selected.EvidencePageMarkers.Count > 0)
             showPage?.Invoke(selected.EvidencePageMarkers[0]);
     }
 
     private void SetSelected(RubyAnnotationStatus status)
     {
-        if (AnnotationGrid.SelectedItem is not RubyAnnotationView selected) return;
-        selected.Status = status;
+        CommitPendingEdits();
+        var selectedViews = AnnotationGrid.SelectedItems.OfType<RubyAnnotationView>().ToArray();
+        var result = RubyReviewSelectionService.ApplyStatus(
+            selectedViews.Select(item => item.ToSnapshot()).ToArray(),
+            status,
+            ParagraphTextFor);
+        if (!result.IsSuccess)
+        {
+            MessageBox.Show(
+                this,
+                string.Join(Environment.NewLine, result.Errors.Select(error => $"- {error.Message} ({error.Key})")),
+                "Ruby validation",
+                MessageBoxButton.OK,
+                MessageBoxImage.Warning);
+            UpdateSummary();
+            return;
+        }
+        for (var index = 0; index < selectedViews.Length; index++)
+            selectedViews[index].ApplyProposal(result.Items[index]);
         AnnotationGrid.Items.Refresh();
+        UpdateSummary();
+    }
+
+    private void AnnotationGridPreviewKeyDown(object sender, KeyEventArgs e)
+    {
+        if (e.Key != Key.Enter || (Keyboard.Modifiers & ModifierKeys.Control) == 0) return;
+        SetSelected(RubyAnnotationStatus.Confirmed);
+        e.Handled = true;
+    }
+
+    private void CommitPendingEdits()
+    {
+        AnnotationGrid.CommitEdit(DataGridEditingUnit.Cell, true);
+        AnnotationGrid.CommitEdit(DataGridEditingUnit.Row, true);
+    }
+
+    private string? ParagraphTextFor(string paragraphId) =>
+        source.Document.Paragraphs.SingleOrDefault(item =>
+            string.Equals(
+                item.ParagraphId.ToString("D"),
+                paragraphId,
+                StringComparison.OrdinalIgnoreCase))?.PlainText;
+
+    private void UpdateSummary()
+    {
+        SummaryText.Text =
+            $"候補: {annotations.Count} 件 / "
+            + $"確定: {annotations.Count(item => item.Status == RubyAnnotationStatus.Confirmed)} 件 / "
+            + $"却下: {annotations.Count(item => item.Status == RubyAnnotationStatus.Rejected)} 件 / "
+            + $"保留: {annotations.Count(item => item.Status is RubyAnnotationStatus.Proposed or RubyAnnotationStatus.Stale)} 件 / "
+            + $"未確定: {unresolvedCount} 件 / "
+            + $"選択: {AnnotationGrid.SelectedItems.Count} 件";
+    }
+
+    private static string FormatBulkOutcome(
+        RubySource source,
+        RubyBulkConfirmationSummary summary)
+    {
+        var lines = new List<string>
+        {
+            source == RubySource.ImageConfirmed ? "画像根拠の一括確定" : "本文根拠の一括確定",
+            $"確認対象: {summary.Examined} 件",
+            $"新規確定: {summary.NewlyConfirmed} 件",
+            $"確定済み: {summary.AlreadyConfirmed} 件",
+            $"根拠種別違い: {summary.WrongSource} 件",
+            $"除外: {summary.Excluded} 件",
+        };
+        if (summary.Examined == 0)
+            lines.Add("対象候補はありませんでした。");
+        if (summary.ExcludedByReason.Count > 0)
+        {
+            lines.Add("除外理由:");
+            lines.AddRange(summary.ExcludedByReason
+                .OrderBy(item => item.Key, StringComparer.Ordinal)
+                .Select(item => $"- {item.Key}: {item.Value} 件"));
+        }
+        if (summary.ValidationErrors.Count > 0)
+        {
+            lines.Add("検証エラーのため確定処理は行われませんでした:");
+            lines.AddRange(summary.ValidationErrors.Select(issue => $"- {issue.Code}: {issue.Message}"));
+        }
+        return string.Join(Environment.NewLine, lines);
     }
 
     private void SaveReview(object sender, RoutedEventArgs e)
     {
-        AnnotationGrid.CommitEdit(DataGridEditingUnit.Row, true);
+        CommitPendingEdits();
         try
         {
             var current = ReviewedDocument;
@@ -202,12 +314,13 @@ public partial class RubyReviewWindow : Window
     {
         foreach (var item in annotations)
         {
-            var proposal = item.ToProposal();
+            var proposal = item.ToSnapshot();
             item.UpdateIssues(
                 issues
                     .Where(issue => RubyBulkConfirmationPolicy.Matches(issue, proposal))
                     .ToArray());
         }
+        UpdateSummary();
     }
 
     private bool HasNewConfirmedWarnings() =>
@@ -276,19 +389,18 @@ public partial class RubyReviewWindow : Window
             Issues = issues;
             Warning = string.Join(Environment.NewLine, issues.Select(issue => issue.Message));
         }
-        public RubyAnnotationProposal ToProposal()
+        public void ApplyProposal(RubyAnnotationProposal proposal)
         {
-            if (Start < 0 || Length < 1 || (long)Start + Length > paragraphText.Length)
-                throw new ArgumentOutOfRangeException(nameof(Start));
-            return original with
-            {
-                Start = Start,
-                Length = Length,
-                BaseText = paragraphText.Substring(Start, Length),
-                Reading = Reading,
-                Status = Status,
-            };
+            Status = proposal.Status;
         }
+        public RubyAnnotationProposal ToSnapshot() => original with
+        {
+            Start = Start,
+            Length = Length,
+            BaseText = BaseText,
+            Reading = Reading,
+            Status = Status,
+        };
 
         private static string WarningKey(RubyValidationIssue issue) =>
             $"{issue.Code}\0{issue.Message}";

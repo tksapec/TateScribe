@@ -250,6 +250,33 @@ public sealed class MainWindowLayoutTests
     }
 
     [Fact]
+    public void Ruby_review_supports_atomic_extended_selection_and_explicit_bulk_outcomes()
+    {
+        var root = FindRepositoryRoot();
+        var xaml = File.ReadAllText(Path.Combine(
+            root, "src", "TateScribe.App", "RubyReviewWindow.xaml"));
+        var source = File.ReadAllText(Path.Combine(
+            root, "src", "TateScribe.App", "RubyReviewWindow.xaml.cs"));
+
+        Assert.Contains("SelectionMode=\"Extended\"", xaml, StringComparison.Ordinal);
+        Assert.Contains("SelectionUnit=\"FullRow\"", xaml, StringComparison.Ordinal);
+        Assert.Contains("PreviewKeyDown=\"AnnotationGridPreviewKeyDown\"", xaml, StringComparison.Ordinal);
+        Assert.Contains("選択項目を確定", xaml, StringComparison.Ordinal);
+        Assert.Contains("選択項目を却下", xaml, StringComparison.Ordinal);
+        Assert.Contains(
+            "AnnotationGrid.SelectedItems.OfType<RubyAnnotationView>().ToArray()",
+            source,
+            StringComparison.Ordinal);
+        Assert.Contains("RubyReviewSelectionService.ApplyStatus", source, StringComparison.Ordinal);
+        Assert.Contains("RubyBulkConfirmationSummary.Create", source, StringComparison.Ordinal);
+        Assert.Contains("ModifierKeys.Control", source, StringComparison.Ordinal);
+        Assert.Contains("Key.Enter", source, StringComparison.Ordinal);
+        Assert.DoesNotContain("Key.Delete", source, StringComparison.Ordinal);
+        Assert.Contains("MessageBox.Show", source, StringComparison.Ordinal);
+        Assert.Contains("UpdateSummary()", source, StringComparison.Ordinal);
+    }
+
+    [Fact]
     public void Fresh_ruby_import_revalidates_after_assigning_annotation_ids()
     {
         var root = FindRepositoryRoot();

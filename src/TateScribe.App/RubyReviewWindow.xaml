@@ -24,7 +24,9 @@
         <DataGrid x:Name="AnnotationGrid"
                   AutoGenerateColumns="False"
                   CanUserAddRows="False"
-                  SelectionMode="Single"
+                  SelectionMode="Extended"
+                  SelectionUnit="FullRow"
+                  PreviewKeyDown="AnnotationGridPreviewKeyDown"
                   SelectionChanged="AnnotationSelectionChanged">
           <DataGrid.Columns>
             <DataGridTextColumn Header="状態" Binding="{Binding Status}" IsReadOnly="True" Width="90" />
@@ -63,6 +65,7 @@
       </Grid.ColumnDefinitions>
       <TextBox x:Name="ParagraphText"
                IsReadOnly="True"
+               IsInactiveSelectionHighlightEnabled="True"
                AcceptsReturn="True"
                TextWrapping="Wrap"
                VerticalScrollBarVisibility="Auto"
@@ -77,10 +80,12 @@
     </Grid>
 
     <StackPanel Grid.Row="3" Orientation="Horizontal" Margin="0,10,0,0">
-      <Button Padding="12,6" Margin="0,0,8,0" Click="AcceptSelected"
-              ToolTip="選択候補を確定し、DOCX／でんでん出力で使用できる状態にします。">選択を確定</Button>
-      <Button Padding="12,6" Margin="0,0,8,0" Click="RejectSelected"
-              ToolTip="選択候補を却下します。本文は変わりません。">選択を却下</Button>
+      <Button AutomationProperties.Name="選択項目を確定"
+              Padding="12,6" Margin="0,0,8,0" Click="AcceptSelected"
+              ToolTip="選択候補を確定し、DOCX／でんでん出力で使用できる状態にします。">選択項目を確定</Button>
+      <Button AutomationProperties.Name="選択項目を却下"
+              Padding="12,6" Margin="0,0,8,0" Click="RejectSelected"
+              ToolTip="選択候補を却下します。本文は変わりません。">選択項目を却下</Button>
       <Button Padding="12,6" Margin="0,0,8,0" Click="ConfirmImageBased"
               ToolTip="原画像上のルビを根拠とするImageConfirmed候補だけを一括確定します。">画像根拠だけ一括確定</Button>
       <Button Padding="12,6" Margin="0,0,8,0" Click="ConfirmTextBased"
