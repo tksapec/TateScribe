@@ -201,6 +201,63 @@ public sealed class RubyReviewSelectionServiceTests
         Assert.Equal([validationError], summary.ValidationErrors);
     }
 
+    [Theory]
+    [InlineData(false, true)]
+    [InlineData(true, false)]
+    public void Failed_cell_or_row_commit_prevents_status_mutation(
+        bool cellCommitSucceeds,
+        bool rowCommitSucceeds)
+    {
+        var status = RubyAnnotationStatus.Proposed;
+        var snapshotCount = 0;
+
+        var executed = RubyReviewPendingEditBoundary.TryRun(
+            () => RubyReviewPendingEditBoundary.TryCommit(
+                () => cellCommitSucceeds,
+                () => rowCommitSucceeds),
+            () =>
+            {
+                snapshotCount++;
+                status = RubyAnnotationStatus.Confirmed;
+            });
+
+        Assert.False(executed);
+        Assert.Equal(0, snapshotCount);
+        Assert.Equal(RubyAnnotationStatus.Proposed, status);
+    }
+
+    [Fact]
+    public void Failed_pending_edit_commit_prevents_save_and_bulk_actions()
+    {
+        var saveCount = 0;
+        var bulkCount = 0;
+
+        var saved = RubyReviewPendingEditBoundary.TryRun(
+            () => false,
+            () => saveCount++);
+        var bulkConfirmed = RubyReviewPendingEditBoundary.TryRun(
+            () => false,
+            () => bulkCount++);
+
+        Assert.False(saved);
+        Assert.False(bulkConfirmed);
+        Assert.Equal(0, saveCount);
+        Assert.Equal(0, bulkCount);
+    }
+
+    [Fact]
+    public void Successful_pending_edit_commit_runs_the_action_once()
+    {
+        var actionCount = 0;
+
+        var executed = RubyReviewPendingEditBoundary.TryRun(
+            () => RubyReviewPendingEditBoundary.TryCommit(() => true, () => true),
+            () => actionCount++);
+
+        Assert.True(executed);
+        Assert.Equal(1, actionCount);
+    }
+
     private static RubyAnnotationProposal Proposal(
         string paragraphId,
         int start,

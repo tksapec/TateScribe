@@ -274,6 +274,15 @@ public sealed class MainWindowLayoutTests
         Assert.DoesNotContain("Key.Delete", source, StringComparison.Ordinal);
         Assert.Contains("MessageBox.Show", source, StringComparison.Ordinal);
         Assert.Contains("UpdateSummary()", source, StringComparison.Ordinal);
+        Assert.Contains("private bool CommitPendingEdits()", source, StringComparison.Ordinal);
+        Assert.Contains("RubyReviewPendingEditBoundary.TryCommit", source, StringComparison.Ordinal);
+        Assert.Equal(
+            3,
+            Count(source, "RubyReviewPendingEditBoundary.TryRun(CommitPendingEdits"));
+        Assert.Contains(
+            "SetSelected(RubyAnnotationStatus.Confirmed);",
+            source[source.IndexOf("AnnotationGridPreviewKeyDown", StringComparison.Ordinal)..],
+            StringComparison.Ordinal);
     }
 
     [Fact]

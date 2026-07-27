@@ -18,6 +18,29 @@ public sealed record RubyReviewSelectionResult(
     public bool IsSuccess => Errors.Count == 0;
 }
 
+public static class RubyReviewPendingEditBoundary
+{
+    public static bool TryCommit(
+        Func<bool> commitCell,
+        Func<bool> commitRow)
+    {
+        ArgumentNullException.ThrowIfNull(commitCell);
+        ArgumentNullException.ThrowIfNull(commitRow);
+        return commitCell() && commitRow();
+    }
+
+    public static bool TryRun(
+        Func<bool> commitPendingEdits,
+        Action action)
+    {
+        ArgumentNullException.ThrowIfNull(commitPendingEdits);
+        ArgumentNullException.ThrowIfNull(action);
+        if (!commitPendingEdits()) return false;
+        action();
+        return true;
+    }
+}
+
 public static class RubyReviewSelectionService
 {
     public static RubyReviewSelectionResult ApplyStatus(

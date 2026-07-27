@@ -128,7 +128,14 @@ public partial class RubyReviewWindow : Window
 
     private void ConfirmSource(RubySource source)
     {
-        CommitPendingEdits();
+        if (RubyReviewPendingEditBoundary.TryRun(CommitPendingEdits, () =>
+                ConfirmSourceAfterPendingEdits(source)))
+            return;
+        ShowPendingEditBulkFailure(source);
+    }
+
+    private void ConfirmSourceAfterPendingEdits(RubySource source)
+    {
         var current = ReviewedDocument;
         var validation = validateReviewed?.Invoke(current)
             ?? new RubyImportPreview(current, annotations.SelectMany(item => item.Issues).ToArray());
@@ -169,7 +176,14 @@ public partial class RubyReviewWindow : Window
 
     private void SetSelected(RubyAnnotationStatus status)
     {
-        CommitPendingEdits();
+        if (RubyReviewPendingEditBoundary.TryRun(CommitPendingEdits, () =>
+                SetSelectedAfterPendingEdits(status)))
+            return;
+        ShowPendingEditValidationFailure();
+    }
+
+    private void SetSelectedAfterPendingEdits(RubyAnnotationStatus status)
+    {
         var selectedViews = AnnotationGrid.SelectedItems.OfType<RubyAnnotationView>().ToArray();
         var result = RubyReviewSelectionService.ApplyStatus(
             selectedViews.Select(item => item.ToSnapshot()).ToArray(),
@@ -199,11 +213,27 @@ public partial class RubyReviewWindow : Window
         e.Handled = true;
     }
 
-    private void CommitPendingEdits()
-    {
-        AnnotationGrid.CommitEdit(DataGridEditingUnit.Cell, true);
-        AnnotationGrid.CommitEdit(DataGridEditingUnit.Row, true);
-    }
+    private bool CommitPendingEdits() =>
+        RubyReviewPendingEditBoundary.TryCommit(
+            () => AnnotationGrid.CommitEdit(DataGridEditingUnit.Cell, true),
+            () => AnnotationGrid.CommitEdit(DataGridEditingUnit.Row, true));
+
+    private void ShowPendingEditValidationFailure() =>
+        MessageBox.Show(
+            this,
+            "保留中の編集を確定できませんでした。入力値を確認してください。",
+            "Ruby validation",
+            MessageBoxButton.OK,
+            MessageBoxImage.Warning);
+
+    private void ShowPendingEditBulkFailure(RubySource source) =>
+        MessageBox.Show(
+            this,
+            (source == RubySource.ImageConfirmed ? "画像根拠" : "本文根拠")
+            + "の一括確定は、保留中の編集を確定できないため中止しました。入力値を確認してください。",
+            "Ruby bulk confirmation",
+            MessageBoxButton.OK,
+            MessageBoxImage.Warning);
 
     private string? ParagraphTextFor(string paragraphId) =>
         source.Document.Paragraphs.SingleOrDefault(item =>
@@ -255,7 +285,13 @@ public partial class RubyReviewWindow : Window
 
     private void SaveReview(object sender, RoutedEventArgs e)
     {
-        CommitPendingEdits();
+        if (RubyReviewPendingEditBoundary.TryRun(CommitPendingEdits, SaveReviewAfterPendingEdits))
+            return;
+        ShowPendingEditValidationFailure();
+    }
+
+    private void SaveReviewAfterPendingEdits()
+    {
         try
         {
             var current = ReviewedDocument;
