@@ -35,6 +35,34 @@ public sealed class MainWindowLayoutTests
     }
 
     [Fact]
+    public void Docx_export_exposes_and_validates_word_ruby_offset_before_preparation()
+    {
+        var root = FindRepositoryRoot();
+        var xaml = File.ReadAllText(Path.Combine(root, "src", "TateScribe.App", "MainWindow.xaml"));
+        var source = File.ReadAllText(Path.Combine(root, "src", "TateScribe.App", "MainWindow.xaml.cs"));
+
+        Assert.Contains("x:Name=\"WordRubyOffsetEditor\"", xaml, StringComparison.Ordinal);
+        Assert.Contains("Text=\"3\"", xaml, StringComparison.Ordinal);
+        Assert.Contains("0～20の整数", xaml, StringComparison.Ordinal);
+        Assert.Contains("Wordで表示するルビのオフセット", xaml, StringComparison.Ordinal);
+        Assert.Contains(
+            "DocxRubyOptions.TryCreate(WordRubyOffsetEditor.Text, out var rubyOptions, out var error)",
+            source,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "Wordルビのオフセットには0～20の整数を入力してください。",
+            source,
+            StringComparison.Ordinal);
+        Assert.True(
+            source.IndexOf("DocxRubyOptions.TryCreate", StringComparison.Ordinal)
+            < source.IndexOf("PrepareStructuredAsync", source.IndexOf("ExportDocx", StringComparison.Ordinal), StringComparison.Ordinal));
+        Assert.Contains(
+            "PageBreakBeforeChapters.IsChecked == true, \"游明朝\", rubyOptions, CancellationToken.None",
+            source,
+            StringComparison.Ordinal);
+    }
+
+    [Fact]
     public void Main_window_exposes_task_specific_editable_copyable_chatgpt_prompts()
     {
         var root = FindRepositoryRoot();

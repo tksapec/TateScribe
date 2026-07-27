@@ -47,6 +47,11 @@
 
           <GroupBox Header="文書出力" Margin="0,0,0,10" Padding="6">
             <StackPanel>
+              <StackPanel Margin="0,0,0,6">
+                <TextBlock FontSize="12" Text="Wordルビのオフセット（0～20の整数）" />
+                <TextBox x:Name="WordRubyOffsetEditor" Margin="0,2,0,0" Text="3"
+                         ToolTip="Wordで表示するルビのオフセットです。0～20の整数で指定します。標準は3です。" />
+              </StackPanel>
               <CheckBox x:Name="PageBreakBeforeChapters" Margin="0,0,0,6"
                         ToolTip="例: ChapterTitleに設定した章見出しを、新しいページから開始します。通常のページ境界では改ページしません。">章タイトルの前で改ページ</CheckBox>
               <Button Margin="0,0,0,6" Padding="8,5" Click="ExportDocx"

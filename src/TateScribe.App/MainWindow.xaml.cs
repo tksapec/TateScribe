@@ -534,6 +534,14 @@ public partial class MainWindow : Window
     private async void ExportDocx(object sender, RoutedEventArgs e)
     {
         if (_projectDirectory is null || _pages.Count == 0) return;
+        if (!DocxRubyOptions.TryCreate(WordRubyOffsetEditor.Text, out var rubyOptions, out var error))
+        {
+            MessageBox.Show(this,
+                $"Wordルビのオフセットには0～20の整数を入力してください。{Environment.NewLine}{error}",
+                "ルビオフセットを確認してください",
+                MessageBoxButton.OK, MessageBoxImage.Warning);
+            return;
+        }
         try
         {
             IsEnabled = false;
@@ -552,7 +560,7 @@ public partial class MainWindow : Window
                 : preparation.Preflight;
             if (!ConfirmExport(preflight, "DOCX")) return;
             await new OpenXmlDocumentExporter().ExportAsync(preparation.Document, outputPath,
-                PageBreakBeforeChapters.IsChecked == true, "游明朝", CancellationToken.None);
+                PageBreakBeforeChapters.IsChecked == true, "游明朝", rubyOptions, CancellationToken.None);
             await new DocumentExportService().PersistAfterSuccessfulOutputAsync(
                 _projectDirectory, preparation.Document, CancellationToken.None);
             var summary = preparation.LegacyPreparation.EmptyPageCount == 0

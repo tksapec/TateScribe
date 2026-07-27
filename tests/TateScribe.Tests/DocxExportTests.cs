@@ -4,6 +4,7 @@ using DocumentFormat.OpenXml.Validation;
 using System.Diagnostics;
 using TateScribe.Core.Export;
 using TateScribe.Core.Proofreading;
+using TateScribe.Core.Ruby;
 using TateScribe.Infrastructure.Export;
 
 namespace TateScribe.Tests;
@@ -63,6 +64,91 @@ public sealed class DocxExportTests : IDisposable
         Assert.Contains("ruby", xml, StringComparison.OrdinalIgnoreCase);
         Assert.DoesNotContain("ScreenshotBoundary", xml, StringComparison.Ordinal);
         Assert.DoesNotContain("w:type=\"page\"", xml, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task Ruby_uses_default_three_point_offset_and_explicit_japanese_run_properties()
+    {
+        await new OpenXmlDocumentExporter().ExportAsync(
+            CreateStructuredRubyDocument(),
+            _path,
+            false,
+            "游明朝",
+            DocxRubyOptions.Default,
+            CancellationToken.None);
+
+        using var word = WordprocessingDocument.Open(_path, false);
+        var ruby = Assert.Single(word.MainDocumentPart!.Document.Body!
+            .Descendants<DocumentFormat.OpenXml.Wordprocessing.Ruby>());
+        var rubyProperties = ruby.GetFirstChild<RubyProperties>()!;
+        var rubyContentRun = ruby.GetFirstChild<RubyContent>()!.GetFirstChild<Run>()!;
+        var rubyBaseRun = ruby.GetFirstChild<RubyBase>()!.GetFirstChild<Run>()!;
+
+        Assert.Equal("16", rubyProperties.GetFirstChild<PhoneticGuideRaise>()!.Val!.Value.ToString());
+        Assert.Equal("21", rubyProperties.GetFirstChild<PhoneticGuideBaseTextSize>()!.Val!.Value);
+        AssertJapaneseRunProperties(rubyContentRun, "游明朝", "10");
+        AssertJapaneseRunProperties(rubyBaseRun, "游明朝", "21");
+        Assert.Empty(new OpenXmlValidator().Validate(word));
+    }
+
+    [Fact]
+    public async Task Legacy_exporter_overloads_forward_default_ruby_options()
+    {
+        var structuredPath = Path.Combine(
+            Path.GetTempPath(),
+            $"TateScribe-structured-{Guid.NewGuid():N}.docx");
+        try
+        {
+            var exporter = new OpenXmlDocumentExporter();
+
+            await exporter.ExportAsync(
+                new ExportDocument([RubyParagraph(ExportStyle.Normal)]),
+                _path,
+                CancellationToken.None);
+            AssertRubyRaise(_path, "16");
+
+            await exporter.ExportAsync(
+                CreateStructuredRubyDocument(),
+                structuredPath,
+                false,
+                "游明朝",
+                CancellationToken.None);
+            AssertRubyRaise(structuredPath, "16");
+        }
+        finally
+        {
+            if (File.Exists(structuredPath)) File.Delete(structuredPath);
+        }
+    }
+
+    [Fact]
+    public async Task Ruby_uses_configured_offset_and_effective_paragraph_sizes()
+    {
+        var document = new ExportDocument([
+            RubyParagraph(ExportStyle.Normal),
+            RubyParagraph(ExportStyle.Heading1),
+            RubyParagraph(ExportStyle.Heading2),
+            RubyParagraph(ExportStyle.Heading3),
+        ]);
+
+        await new OpenXmlDocumentExporter().ExportAsync(
+            document,
+            _path,
+            new DocxRubyOptions(5),
+            CancellationToken.None);
+
+        using var word = WordprocessingDocument.Open(_path, false);
+        var rubies = word.MainDocumentPart!.Document.Body!
+            .Descendants<DocumentFormat.OpenXml.Wordprocessing.Ruby>()
+            .ToArray();
+
+        Assert.Collection(
+            rubies,
+            ruby => AssertRubyMetrics(ruby, "20", "21"),
+            ruby => AssertRubyMetrics(ruby, "20", "32"),
+            ruby => AssertRubyMetrics(ruby, "20", "28"),
+            ruby => AssertRubyMetrics(ruby, "20", "24"));
+        Assert.Empty(new OpenXmlValidator().Validate(word));
     }
 
     [Fact]
@@ -236,5 +322,57 @@ public sealed class DocxExportTests : IDisposable
         }
 
         throw new DirectoryNotFoundException("Could not locate the TateScribe repository root.");
+    }
+
+    private static ExportParagraph RubyParagraph(ExportStyle style) =>
+        new(style, "本文", new RubyAnnotation("本文", "ほんぶん"));
+
+    private static StructuredDocument CreateStructuredRubyDocument() =>
+        new(
+            Guid.NewGuid(),
+            [
+                new StructuredParagraph(
+                    Guid.NewGuid(),
+                    DocumentElementRole.BodyParagraph,
+                    [new RubyInline(Guid.NewGuid(), "本文", "ほんぶん", RubySource.ImageConfirmed, 1)],
+                    "hash",
+                    [])
+            ],
+            "document-hash");
+
+    private static void AssertRubyRaise(string path, string expectedRaise)
+    {
+        using var word = WordprocessingDocument.Open(path, false);
+        var ruby = Assert.Single(word.MainDocumentPart!.Document.Body!
+            .Descendants<DocumentFormat.OpenXml.Wordprocessing.Ruby>());
+        Assert.Equal(
+            expectedRaise,
+            ruby.GetFirstChild<RubyProperties>()!
+                .GetFirstChild<PhoneticGuideRaise>()!.Val!.Value.ToString());
+    }
+
+    private static void AssertRubyMetrics(
+        DocumentFormat.OpenXml.Wordprocessing.Ruby ruby,
+        string expectedRaise,
+        string expectedBaseSize)
+    {
+        var properties = ruby.GetFirstChild<RubyProperties>()!;
+        Assert.Equal(expectedRaise, properties.GetFirstChild<PhoneticGuideRaise>()!.Val!.Value.ToString());
+        Assert.Equal(expectedBaseSize, properties.GetFirstChild<PhoneticGuideBaseTextSize>()!.Val!.Value);
+        Assert.Equal(
+            expectedBaseSize,
+            ruby.GetFirstChild<RubyBase>()!.GetFirstChild<Run>()!
+                .RunProperties!.FontSize!.Val!.Value);
+    }
+
+    private static void AssertJapaneseRunProperties(Run run, string expectedFont, string expectedSize)
+    {
+        var properties = run.RunProperties!;
+        Assert.Equal(expectedFont, properties.RunFonts!.Ascii!.Value);
+        Assert.Equal(expectedFont, properties.RunFonts.HighAnsi!.Value);
+        Assert.Equal(expectedFont, properties.RunFonts.EastAsia!.Value);
+        Assert.Equal(expectedSize, properties.FontSize!.Val!.Value);
+        Assert.Equal(expectedSize, properties.FontSizeComplexScript!.Val!.Value);
+        Assert.Equal("ja-JP", properties.Languages!.EastAsia!.Value);
     }
 }

@@ -8,10 +8,33 @@ namespace TateScribe.Infrastructure.Export;
 
 public sealed class OpenXmlDocumentExporter : IDocumentExporter, IStructuredDocumentExporter
 {
-    public int RubyFontSizeHalfPoints { get; init; } = 10;
-    public int RubyRaiseHalfPoints { get; init; } = 10;
+    private const int LegacyRubyFontSizeHalfPoints = 10;
+    private const int LegacyRubyRaiseHalfPoints = 10;
 
-    public Task ExportAsync(ExportDocument document, string destinationPath, CancellationToken cancellationToken)
+    public int RubyFontSizeHalfPoints { get; init; } = LegacyRubyFontSizeHalfPoints;
+    public int RubyRaiseHalfPoints { get; init; } = LegacyRubyRaiseHalfPoints;
+
+    public Task ExportAsync(
+        ExportDocument document,
+        string destinationPath,
+        CancellationToken cancellationToken) =>
+        HasLegacyRubyOverrides
+            ? ExportAsyncCore(document, destinationPath, new DocxRubyOptions(0, RubyFontSizeHalfPoints), RubyRaiseHalfPoints, cancellationToken)
+            : ExportAsync(document, destinationPath, DocxRubyOptions.Default, cancellationToken);
+
+    public Task ExportAsync(
+        ExportDocument document,
+        string destinationPath,
+        DocxRubyOptions rubyOptions,
+        CancellationToken cancellationToken) =>
+        ExportAsyncCore(document, destinationPath, rubyOptions, null, cancellationToken);
+
+    private Task ExportAsyncCore(
+        ExportDocument document,
+        string destinationPath,
+        DocxRubyOptions rubyOptions,
+        int? rubyRaiseHalfPoints,
+        CancellationToken cancellationToken)
     {
         cancellationToken.ThrowIfCancellationRequested();
         var parent = Path.GetDirectoryName(destinationPath);
@@ -37,7 +60,12 @@ public sealed class OpenXmlDocumentExporter : IDocumentExporter, IStructuredDocu
             }
             else
             {
-                paragraph.Append(new Run(CreateRuby(item.Ruby)));
+                paragraph.Append(new Run(CreateRuby(
+                    item.Ruby,
+                    document.JapaneseFontName,
+                    GetBaseFontSizeHalfPoints(styleId),
+                    rubyOptions,
+                    rubyRaiseHalfPoints)));
             }
             mainPart.Document.Body!.Append(paragraph);
         }
@@ -53,6 +81,47 @@ public sealed class OpenXmlDocumentExporter : IDocumentExporter, IStructuredDocu
         string destinationPath,
         bool pageBreakBeforeChapters,
         string japaneseFontName,
+        CancellationToken cancellationToken) =>
+        HasLegacyRubyOverrides
+            ? ExportAsyncCore(
+                document,
+                destinationPath,
+                pageBreakBeforeChapters,
+                japaneseFontName,
+                new DocxRubyOptions(0, RubyFontSizeHalfPoints),
+                RubyRaiseHalfPoints,
+                cancellationToken)
+            : ExportAsync(
+                document,
+                destinationPath,
+                pageBreakBeforeChapters,
+                japaneseFontName,
+                DocxRubyOptions.Default,
+                cancellationToken);
+
+    public Task ExportAsync(
+        StructuredDocument document,
+        string destinationPath,
+        bool pageBreakBeforeChapters,
+        string japaneseFontName,
+        DocxRubyOptions rubyOptions,
+        CancellationToken cancellationToken) =>
+        ExportAsyncCore(
+            document,
+            destinationPath,
+            pageBreakBeforeChapters,
+            japaneseFontName,
+            rubyOptions,
+            null,
+            cancellationToken);
+
+    private Task ExportAsyncCore(
+        StructuredDocument document,
+        string destinationPath,
+        bool pageBreakBeforeChapters,
+        string japaneseFontName,
+        DocxRubyOptions rubyOptions,
+        int? rubyRaiseHalfPoints,
         CancellationToken cancellationToken)
     {
         cancellationToken.ThrowIfCancellationRequested();
@@ -84,7 +153,12 @@ public sealed class OpenXmlDocumentExporter : IDocumentExporter, IStructuredDocu
                         paragraph.Append(new Run(new Text(text.Text) { Space = SpaceProcessingModeValues.Preserve }));
                         break;
                     case RubyInline ruby:
-                        paragraph.Append(new Run(CreateRuby(new RubyAnnotation(ruby.BaseText, ruby.Reading))));
+                        paragraph.Append(new Run(CreateRuby(
+                            new RubyAnnotation(ruby.BaseText, ruby.Reading),
+                            japaneseFontName,
+                            GetBaseFontSizeHalfPoints(styleId),
+                            rubyOptions,
+                            rubyRaiseHalfPoints)));
                         break;
                 }
             }
@@ -150,14 +224,57 @@ public sealed class OpenXmlDocumentExporter : IDocumentExporter, IStructuredDocu
         return style;
     }
 
-    private OpenXmlElement CreateRuby(RubyAnnotation ruby) =>
+    private bool HasLegacyRubyOverrides =>
+        RubyFontSizeHalfPoints != LegacyRubyFontSizeHalfPoints
+        || RubyRaiseHalfPoints != LegacyRubyRaiseHalfPoints;
+
+    private static int GetBaseFontSizeHalfPoints(string styleId) =>
+        styleId switch
+        {
+            "Heading1" => 32,
+            "Heading2" => 28,
+            "Heading3" => 24,
+            _ => 21,
+        };
+
+    private static OpenXmlElement CreateRuby(
+        RubyAnnotation ruby,
+        string japaneseFontName,
+        int baseFontSizeHalfPoints,
+        DocxRubyOptions options,
+        int? rubyRaiseHalfPoints) =>
         new DocumentFormat.OpenXml.Wordprocessing.Ruby(
             new RubyProperties(
                 new RubyAlign { Val = RubyAlignValues.Center },
-                new PhoneticGuideTextFontSize { Val = RubyFontSizeHalfPoints.ToString(System.Globalization.CultureInfo.InvariantCulture) },
-                new PhoneticGuideRaise { Val = checked((short)RubyRaiseHalfPoints) },
-                new PhoneticGuideBaseTextSize { Val = "21" },
+                new PhoneticGuideTextFontSize { Val = ToInvariantString(options.RubyFontSizeHalfPoints) },
+                new PhoneticGuideRaise
+                {
+                    Val = checked((short)(rubyRaiseHalfPoints
+                        ?? WordRubyMetrics.CalculateRaiseHalfPoints(
+                            options.RubyFontSizeHalfPoints,
+                            options.WordOffsetPoints)))
+                },
+                new PhoneticGuideBaseTextSize { Val = ToInvariantString(baseFontSizeHalfPoints) },
                 new LanguageId { Val = "ja-JP" }),
-            new RubyContent(new Run(new Text(ruby.RubyText) { Space = SpaceProcessingModeValues.Preserve })),
-            new RubyBase(new Run(new Text(ruby.ParentText) { Space = SpaceProcessingModeValues.Preserve })));
+            new RubyContent(new Run(
+                CreateJapaneseRunProperties(japaneseFontName, options.RubyFontSizeHalfPoints),
+                new Text(ruby.RubyText) { Space = SpaceProcessingModeValues.Preserve })),
+            new RubyBase(new Run(
+                CreateJapaneseRunProperties(japaneseFontName, baseFontSizeHalfPoints),
+                new Text(ruby.ParentText) { Space = SpaceProcessingModeValues.Preserve })));
+
+    private static RunProperties CreateJapaneseRunProperties(string japaneseFontName, int fontSizeHalfPoints) =>
+        new(
+            new RunFonts
+            {
+                Ascii = japaneseFontName,
+                HighAnsi = japaneseFontName,
+                EastAsia = japaneseFontName,
+            },
+            new FontSize { Val = ToInvariantString(fontSizeHalfPoints) },
+            new FontSizeComplexScript { Val = ToInvariantString(fontSizeHalfPoints) },
+            new Languages { EastAsia = "ja-JP" });
+
+    private static string ToInvariantString(int value) =>
+        value.ToString(System.Globalization.CultureInfo.InvariantCulture);
 }
