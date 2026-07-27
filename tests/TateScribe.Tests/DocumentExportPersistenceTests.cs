@@ -76,7 +76,7 @@ public sealed class DocumentExportPersistenceTests : IDisposable
                 directory, [page], RubyPolicy.PreserveOriginalOnly, destination, CancellationToken.None));
 
             Assert.Null(await repository.FindDocumentSnapshotAsync(projectId, draft.Document.DocumentTextHash, CancellationToken.None));
-            Assert.Null(await repository.GetLatestRubyBatchWithAnnotationsIdAsync(CancellationToken.None));
+            Assert.Empty(await repository.LoadRubyBatchHistoryAsync(CancellationToken.None));
         }
     }
 
