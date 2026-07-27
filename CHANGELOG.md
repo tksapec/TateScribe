@@ -13,5 +13,6 @@
 - Added SQLite schema version 9 with separate ruby reading/parent candidates, coordinate link confidence, and v8 backfill.
 - Added kana-safe ruby evidence matching, candidate-scoped warnings, schema/prompt parity, and warning-aware bulk confirmation.
 - Added a shared DOCX/Denden preflight summary; non-confirmed and stale ruby remain excluded.
+- Hardened Denden uploads with a root instruction README and upload-only assets, semantic-safe Markdown escaping, an exact 100-file upload boundary, and rotated/cropped illustration PNG preparation.
 - Made the main sidebar scrollable and widened/labeled all four crop-percentage inputs.
 - Excluded the minimal `SlowZip` test from standard test runs and added `package.ps1 -SkipArchive`.

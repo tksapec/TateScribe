@@ -181,7 +181,7 @@ public sealed class DendenExportService : IDendenExportService
                     block.Illustration.RotationDegrees)))
             .ToArray();
         var outputFileCount = (options.SplitByChapter ? chapters.Count : 1)
-            + 3
+            + 2
             + (cover is null ? 0 : 1)
             + illustrations.Length
             + (options.ApprovedGlobalRubies is { Count: > 0 } ? 1 : 0);
@@ -309,10 +309,13 @@ public sealed class DendenExportService : IDendenExportService
             .Replace("{", "\\{", StringComparison.Ordinal)
             .Replace("}", "\\}", StringComparison.Ordinal)
             .Replace("|", "\\|", StringComparison.Ordinal);
-        if (System.Text.RegularExpressions.Regex.IsMatch(result, @"^\d+\.\s")
-            || result.StartsWith("    ", StringComparison.Ordinal)
-            || result.StartsWith('\t')
-            || result.StartsWith('#') || result.StartsWith('>') || result.StartsWith('-')
+        if (System.Text.RegularExpressions.Regex.IsMatch(result, @"^\d+\.\s"))
+            result = System.Text.RegularExpressions.Regex.Replace(result, @"^(\d+)\.", "$1&#46;");
+        else if (result.StartsWith("    ", StringComparison.Ordinal))
+            result = "&#32;&#32;&#32;&#32;" + result[4..];
+        else if (result.StartsWith('\t'))
+            result = "&#9;" + result[1..];
+        else if (result.StartsWith('#') || result.StartsWith('>') || result.StartsWith('-')
             || result.StartsWith('*') || result.StartsWith('+'))
             result = "\\" + result;
         return result.Replace("[", "\\[", StringComparison.Ordinal)

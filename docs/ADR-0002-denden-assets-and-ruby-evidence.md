@@ -2,7 +2,7 @@
 
 ## Decision
 
-Denden export uses a dedicated ordered block model over the unchanged `StructuredDocument`. Explicit illustration pages become flat, stable assets referenced by Markdown; joined paragraphs are not split. A deterministic image boundary preserves PNG/JPEG/GIF, converts other decodable formats to PNG, and rejects images over 3 MiB or exports over 100 files.
+Denden export uses a dedicated ordered block model over the unchanged `StructuredDocument`. Explicit illustration pages become stable assets in `upload/` referenced by Markdown; joined paragraphs are not split. The root `README.txt` is instructions only and is never an upload asset. A deterministic image boundary preserves full-crop/unrotated PNG/JPEG/GIF, converts transformed and other decodable formats to PNG, and rejects images over 3 MiB or more than 100 upload files.
 
 Ruby OCR evidence stores the recognized reading separately from an optional coordinate-linked parent-text candidate. Schema version 9 adds these fields and link confidence while retaining the legacy columns and backfilling version-8 rows.
 

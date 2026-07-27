@@ -270,13 +270,17 @@ public sealed class RubyPackageAndExportTests : IDisposable
 
         var markdown = await File.ReadAllTextAsync(Path.Combine(destination, "upload", "book.md"));
         Assert.Contains("# A &amp; &lt;B&gt;", markdown, StringComparison.Ordinal);
-        Assert.Contains("\\1986. What a great season.", markdown, StringComparison.Ordinal);
-        Assert.Contains("\\    indented", markdown, StringComparison.Ordinal);
-        Assert.Contains("\\\tindented", markdown, StringComparison.Ordinal);
+        Assert.Contains("1986&#46; What a great season.", markdown, StringComparison.Ordinal);
+        Assert.Contains("&#32;&#32;&#32;&#32;indented", markdown, StringComparison.Ordinal);
+        Assert.Contains("&#9;indented", markdown, StringComparison.Ordinal);
         Assert.Contains("\\{brace\\|pipe\\}\\\\backslash \\*em\\* \\[link\\]\\! \\`code\\` \\_under\\_", markdown, StringComparison.Ordinal);
         Assert.Contains("\u3000full width space", markdown, StringComparison.Ordinal);
         Assert.Contains("{base|reading}", markdown, StringComparison.Ordinal);
         Assert.Contains("***", markdown, StringComparison.Ordinal);
+        var renderedLines = markdown.Split('\n').Select(System.Net.WebUtility.HtmlDecode).ToArray();
+        Assert.Contains("1986. What a great season.", renderedLines);
+        Assert.Contains("    indented", renderedLines);
+        Assert.Contains("\tindented", renderedLines);
     }
 
     [Fact]
@@ -300,6 +304,112 @@ public sealed class RubyPackageAndExportTests : IDisposable
         Assert.Equal(3, rendered.Width);
         Assert.Equal(8, rendered.Height);
         Assert.Equal(original, await File.ReadAllBytesAsync(source));
+    }
+
+    [Theory]
+    [InlineData(90, "left", 3, 8, 0, 5)]
+    [InlineData(90, "right", 3, 8, 0, 2)]
+    [InlineData(90, "top", 6, 4, 0, 5)]
+    [InlineData(90, "bottom", 6, 4, 4, 5)]
+    [InlineData(180, "left", 4, 6, 7, 5)]
+    [InlineData(180, "right", 4, 6, 3, 5)]
+    [InlineData(180, "top", 8, 3, 7, 5)]
+    [InlineData(180, "bottom", 8, 3, 7, 2)]
+    [InlineData(270, "left", 3, 8, 7, 0)]
+    [InlineData(270, "right", 3, 8, 7, 3)]
+    [InlineData(270, "top", 6, 4, 7, 0)]
+    [InlineData(270, "bottom", 6, 4, 3, 0)]
+    public async Task Denden_transforms_all_crop_sides_in_rotated_coordinates(
+        int rotation,
+        string side,
+        int expectedWidth,
+        int expectedHeight,
+        byte expectedSourceX,
+        byte expectedSourceY)
+    {
+        Directory.CreateDirectory(tempPath);
+        var source = Path.Combine(tempPath, $"coordinate-{rotation}-{side}.png");
+        WriteCoordinateImage(source);
+        var crop = side switch
+        {
+            "left" => new TateScribe.Core.Images.NormalizedCrop(0, 0, .5, 1),
+            "right" => new TateScribe.Core.Images.NormalizedCrop(.5, 0, 1, 1),
+            "top" => new TateScribe.Core.Images.NormalizedCrop(0, 0, 1, .5),
+            _ => new TateScribe.Core.Images.NormalizedCrop(0, .5, 1, 1),
+        };
+        var document = CreateDocument();
+        var export = new DendenExportDocument(document,
+        [
+            new DendenParagraphBlock(document.Paragraphs[0]),
+            new DendenIllustrationBlock(new DendenIllustration(
+                Guid.NewGuid(), 1, source, "Illustration", Crop: crop, RotationDegrees: rotation)),
+        ]);
+        var destination = Path.Combine(tempPath, $"coordinates-{rotation}-{side}");
+
+        await new DendenExportService().ExportAsync(export, new DendenExportOptions("Book", "Author"), destination, CancellationToken.None);
+
+        using var rendered = Cv2.ImRead(Path.Combine(destination, "upload", "illustration-001.png"), ImreadModes.Color);
+        Assert.Equal(expectedWidth, rendered.Width);
+        Assert.Equal(expectedHeight, rendered.Height);
+        var pixel = rendered.At<Vec3b>(0, 0);
+        Assert.Equal(expectedSourceX, pixel.Item0);
+        Assert.Equal(expectedSourceY, pixel.Item1);
+    }
+
+    [Theory]
+    [InlineData("jpg")]
+    [InlineData("gif")]
+    [InlineData("webp")]
+    public async Task Denden_transformed_supported_and_converted_illustrations_are_png_and_preserve_originals(string extension)
+    {
+        Directory.CreateDirectory(tempPath);
+        var source = Path.Combine(tempPath, $"transformed.{extension}");
+        if (extension == "gif")
+            await File.WriteAllBytesAsync(source, Convert.FromBase64String("R0lGODlhAQABAIAAAAAAAP///ywAAAAAAQABAAACAUwAOw=="));
+        else
+            WriteArtificialImage(source, new Scalar(15, 30, 45));
+        var original = await File.ReadAllBytesAsync(source);
+        var document = CreateDocument();
+        var export = new DendenExportDocument(document,
+        [
+            new DendenParagraphBlock(document.Paragraphs[0]),
+            new DendenIllustrationBlock(new DendenIllustration(
+                Guid.NewGuid(), 1, source, "Illustration", RotationDegrees: 90)),
+        ]);
+        var destination = Path.Combine(tempPath, $"transformed-{extension}");
+
+        await new DendenExportService().ExportAsync(export, new DendenExportOptions("Book", "Author"), destination, CancellationToken.None);
+
+        var bytes = await File.ReadAllBytesAsync(Path.Combine(destination, "upload", "illustration-001.png"));
+        Assert.Equal(new byte[] { 0x89, 0x50, 0x4e, 0x47 }, bytes[..4]);
+        Assert.False(File.Exists(Path.Combine(destination, "upload", "illustration-001.jpg")));
+        Assert.False(File.Exists(Path.Combine(destination, "upload", "illustration-001.gif")));
+        Assert.Equal(original, await File.ReadAllBytesAsync(source));
+    }
+
+    [Fact]
+    public async Task Denden_rejects_a_transformed_image_larger_than_three_mebibytes()
+    {
+        Directory.CreateDirectory(tempPath);
+        var source = Path.Combine(tempPath, "oversized-transformed.png");
+        using (var image = new Mat(1600, 1600, MatType.CV_8UC3))
+        {
+            Cv2.Randu(image, Scalar.All(0), Scalar.All(256));
+            Assert.True(Cv2.ImWrite(source, image));
+        }
+        var document = CreateDocument();
+        var export = new DendenExportDocument(document,
+        [
+            new DendenParagraphBlock(document.Paragraphs[0]),
+            new DendenIllustrationBlock(new DendenIllustration(
+                Guid.NewGuid(), 1, source, "Illustration", RotationDegrees: 90)),
+        ]);
+        var destination = Path.Combine(tempPath, "oversized-transformed-output");
+
+        await Assert.ThrowsAsync<InvalidOperationException>(() =>
+            new DendenExportService().ExportAsync(export, new DendenExportOptions("Book", "Author"), destination, CancellationToken.None));
+
+        Assert.False(Directory.Exists(destination));
     }
 
     [Fact]
@@ -474,12 +584,34 @@ public sealed class RubyPackageAndExportTests : IDisposable
     }
 
     [Fact]
-    public async Task Denden_rejects_more_than_one_hundred_output_files_before_creation()
+    public async Task Denden_allows_exactly_one_hundred_upload_files()
     {
         Directory.CreateDirectory(tempPath);
         var illustration = Path.Combine(tempPath, "illustration.png");
         WriteArtificialImage(illustration, new Scalar(1, 2, 3));
-        var destination = Path.Combine(tempPath, "too-many-files");
+        var destination = Path.Combine(tempPath, "exactly-one-hundred-files");
+
+        await new DendenExportService().ExportAsync(
+            CreateDocument(),
+            new DendenExportOptions(
+                "書名",
+                "著者",
+                IllustrationImagePaths: Enumerable.Repeat(illustration, 97).ToArray()),
+            destination,
+            CancellationToken.None);
+
+        Assert.Equal(100, Directory.GetFiles(Path.Combine(destination, "upload")).Length);
+        Assert.True(File.Exists(Path.Combine(destination, "README.txt")));
+        Assert.False(File.Exists(Path.Combine(destination, "upload", "README.txt")));
+    }
+
+    [Fact]
+    public async Task Denden_rejects_one_hundred_and_one_upload_files_before_creation()
+    {
+        Directory.CreateDirectory(tempPath);
+        var illustration = Path.Combine(tempPath, "illustration.png");
+        WriteArtificialImage(illustration, new Scalar(1, 2, 3));
+        var destination = Path.Combine(tempPath, "one-hundred-and-one-files");
 
         var error = await Assert.ThrowsAsync<InvalidOperationException>(() =>
             new DendenExportService().ExportAsync(
@@ -487,7 +619,7 @@ public sealed class RubyPackageAndExportTests : IDisposable
                 new DendenExportOptions(
                     "書名",
                     "著者",
-                    IllustrationImagePaths: Enumerable.Repeat(illustration, 97).ToArray()),
+                    IllustrationImagePaths: Enumerable.Repeat(illustration, 98).ToArray()),
                 destination,
                 CancellationToken.None));
 
@@ -765,6 +897,17 @@ public sealed class RubyPackageAndExportTests : IDisposable
     private static void WriteArtificialImage(string path, Scalar color)
     {
         using var image = new Mat(8, 8, MatType.CV_8UC3, color);
+        Assert.True(Cv2.ImWrite(path, image));
+    }
+
+    private static void WriteCoordinateImage(string path)
+    {
+        using var image = new Mat(6, 8, MatType.CV_8UC3);
+        const int height = 6;
+        const int width = 8;
+        for (var y = 0; y < height; y++)
+        for (var x = 0; x < width; x++)
+            image.Set(y, x, new Vec3b((byte)x, (byte)y, 0));
         Assert.True(Cv2.ImWrite(path, image));
     }
 

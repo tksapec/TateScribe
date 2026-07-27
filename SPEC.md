@@ -21,6 +21,6 @@ The authoritative model is a `StructuredDocument` with stable persisted paragrap
 
 TateScribe generates schema-valid multi-ruby DOCX and deterministic Denden Converter folders. Denden text is UTF-8 without BOM with LF line endings and fixed ordering. EPUB generation is outside this phase.
 
-`ddconv.yml` follows version 1.0 with structured title/creator entries and official option names. Illustration output is opt-in, flat, ordered by page, and referenced from Markdown. PNG/JPEG/GIF are preserved, other decodable formats become PNG, images over 3 MiB and exports over 100 files are rejected before output creation. DOCX and Denden use the same preflight counts and never render Proposed, Unresolved, or Stale ruby.
+`ddconv.yml` follows version 1.0 with structured title/creator entries and official option names. A Denden destination contains an instruction-only `README.txt` plus an `upload/` folder; users select every file in `upload/`, never the README. Illustration output is opt-in, ordered by page, and referenced from Markdown. Full-crop, unrotated PNG/JPEG/GIF are preserved; transformed illustrations and other decodable formats become PNG. Images over 3 MiB and more than 100 files inside `upload/` are rejected before output creation. DOCX and Denden use the same preflight counts and never render Proposed, Unresolved, or Stale ruby.
 
 Compatibility with existing project databases, proofreading format 1/2, legacy `ExportDocument`, page roles, boundary joins, and existing OCR/manual/confirmed layers is required.
