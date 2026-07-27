@@ -244,13 +244,10 @@ public partial class RubyReviewWindow : Window
 
     private void UpdateSummary()
     {
-        SummaryText.Text =
-            $"候補: {annotations.Count} 件 / "
-            + $"確定: {annotations.Count(item => item.Status == RubyAnnotationStatus.Confirmed)} 件 / "
-            + $"却下: {annotations.Count(item => item.Status == RubyAnnotationStatus.Rejected)} 件 / "
-            + $"保留: {annotations.Count(item => item.Status is RubyAnnotationStatus.Proposed or RubyAnnotationStatus.Stale)} 件 / "
-            + $"未確定: {unresolvedCount} 件 / "
-            + $"選択: {AnnotationGrid.SelectedItems.Count} 件";
+        SummaryText.Text = RubyReviewSummaryFormatter.Format(
+            annotations.Select(item => item.ToSnapshot()).ToArray(),
+            unresolvedCount,
+            AnnotationGrid.SelectedItems.Count);
     }
 
     private static string FormatBulkOutcome(

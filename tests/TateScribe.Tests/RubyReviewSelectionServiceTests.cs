@@ -258,6 +258,28 @@ public sealed class RubyReviewSelectionServiceTests
         Assert.Equal(1, actionCount);
     }
 
+    [Fact]
+    public void Summary_formats_each_annotation_status_as_a_distinct_count()
+    {
+        var annotations = new[]
+        {
+            Proposal("p1", 0, 1, "甲", "こう") with { Status = RubyAnnotationStatus.Confirmed },
+            Proposal("p1", 1, 1, "乙", "おつ") with { Status = RubyAnnotationStatus.Proposed },
+            Proposal("p1", 2, 1, "丙", "へい") with { Status = RubyAnnotationStatus.Proposed },
+            Proposal("p1", 3, 1, "丁", "てい") with { Status = RubyAnnotationStatus.Rejected },
+            Proposal("p1", 4, 1, "戊", "ぼ") with { Status = RubyAnnotationStatus.Stale },
+        };
+
+        var summary = RubyReviewSummaryFormatter.Format(
+            annotations,
+            unresolvedCount: 3,
+            selectedCount: 2);
+
+        Assert.Equal(
+            "候補: 5 件 / 確定: 1 件 / 提案: 2 件 / 却下: 1 件 / 古い候補: 1 件 / 未確定: 3 件 / 選択: 2 件",
+            summary);
+    }
+
     private static RubyAnnotationProposal Proposal(
         string paragraphId,
         int start,

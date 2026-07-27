@@ -41,6 +41,24 @@ public static class RubyReviewPendingEditBoundary
     }
 }
 
+public static class RubyReviewSummaryFormatter
+{
+    public static string Format(
+        IReadOnlyList<RubyAnnotationProposal> annotations,
+        int unresolvedCount,
+        int selectedCount)
+    {
+        ArgumentNullException.ThrowIfNull(annotations);
+        return $"候補: {annotations.Count} 件 / "
+            + $"確定: {annotations.Count(item => item.Status == RubyAnnotationStatus.Confirmed)} 件 / "
+            + $"提案: {annotations.Count(item => item.Status == RubyAnnotationStatus.Proposed)} 件 / "
+            + $"却下: {annotations.Count(item => item.Status == RubyAnnotationStatus.Rejected)} 件 / "
+            + $"古い候補: {annotations.Count(item => item.Status == RubyAnnotationStatus.Stale)} 件 / "
+            + $"未確定: {unresolvedCount} 件 / "
+            + $"選択: {selectedCount} 件";
+    }
+}
+
 public static class RubyReviewSelectionService
 {
     public static RubyReviewSelectionResult ApplyStatus(
