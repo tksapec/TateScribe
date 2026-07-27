@@ -9,6 +9,7 @@
   <ItemGroup>
     <ProjectReference Include="..\..\src\TateScribe.Core\TateScribe.Core.csproj" />
     <ProjectReference Include="..\..\src\TateScribe.Infrastructure\TateScribe.Infrastructure.csproj" />
+    <ProjectReference Include="..\..\src\TateScribe.App\TateScribe.App.csproj" />
     <PackageReference Include="Microsoft.NET.Test.Sdk" />
     <PackageReference Include="xunit" />
     <PackageReference Include="xunit.runner.visualstudio">
