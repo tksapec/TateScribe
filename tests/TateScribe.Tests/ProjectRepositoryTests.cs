@@ -1047,6 +1047,132 @@ public sealed class ProjectRepositoryTests : IDisposable
         Assert.Equal(BoundaryJoinType.ParagraphBreak, loaded.BoundaryJoinType);
     }
 
+    [Fact]
+    public async Task Ruby_batch_history_selects_latest_annotated_batch_and_reports_counts_and_staleness()
+    {
+        Directory.CreateDirectory(_directory);
+        await using var repository = await SqliteProjectRepository.CreateAsync(
+            _directory,
+            CancellationToken.None);
+        var page = new ProjectPage(
+            Guid.NewGuid(),
+            "page.png",
+            Path.Combine(_directory, "page.png"),
+            "hash",
+            0,
+            true,
+            0);
+        await File.WriteAllBytesAsync(page.SourcePath, [1]);
+        await repository.SavePagesAsync([page], CancellationToken.None);
+        var projectId = await repository.GetProjectIdAsync(CancellationToken.None);
+        var paragraph = new StructuredParagraph(
+            Guid.NewGuid(),
+            DocumentElementRole.BodyParagraph,
+            [new TextInline("AABBCC")],
+            DocumentTextHash.Compute("AABBCC"),
+            [new SourceSpan(page.Id, "0001", 0, 6)]);
+        var draft = new StructuredDocument(projectId, [paragraph], string.Empty);
+        var document = draft with { DocumentTextHash = DocumentTextHash.Compute(draft) };
+        var snapshotId = await repository.SaveDocumentSnapshotAsync(
+            document,
+            "Confirmed",
+            CancellationToken.None);
+        var annotatedBatchId = Guid.NewGuid();
+        var packagePages = new[]
+        {
+            new RubyPackagePage(page.Id, "0001", page.SourcePath, null),
+        };
+        await repository.RecordRubyBatchAsync(
+            annotatedBatchId,
+            projectId,
+            snapshotId,
+            RubyPolicy.SuggestDifficultReadings,
+            packagePages,
+            [],
+            CancellationToken.None);
+        var proposals = new[]
+        {
+            new RubyAnnotationProposal(
+                paragraph.ParagraphId.ToString("D"), 0, 2, "AA", "\u3048\u3044",
+                RubySource.ImageConfirmed, .9, ["0001"], "image", Guid.NewGuid(),
+                RubyAnnotationStatus.Confirmed),
+            new RubyAnnotationProposal(
+                paragraph.ParagraphId.ToString("D"), 2, 2, "BB", "\u3073\u3044",
+                RubySource.TextConfirmed, .9, ["0001"], "text", Guid.NewGuid(),
+                RubyAnnotationStatus.Proposed),
+            new RubyAnnotationProposal(
+                paragraph.ParagraphId.ToString("D"), 4, 2, "CC", "\u3057\u3044",
+                RubySource.UserConfirmed, .9, ["0001"], "user", Guid.NewGuid(),
+                RubyAnnotationStatus.Stale),
+        };
+        await repository.SaveRubyImportAsync(
+            snapshotId,
+            RubyPolicy.SuggestDifficultReadings,
+            new RubyImportDocument(
+                1,
+                projectId,
+                annotatedBatchId,
+                document.DocumentTextHash,
+                proposals,
+                [
+                    new RubyUnresolvedItem(
+                        paragraph.ParagraphId.ToString("D"),
+                        0,
+                        2,
+                        "AA",
+                        ["0001"],
+                        "unknown"),
+                ]),
+            CancellationToken.None);
+
+        await Task.Delay(10);
+        var emptyBatchId = Guid.NewGuid();
+        await repository.RecordRubyBatchAsync(
+            emptyBatchId,
+            projectId,
+            snapshotId,
+            RubyPolicy.PreserveOriginalOnly,
+            packagePages,
+            [],
+            CancellationToken.None);
+        await Task.Delay(10);
+        var newerParagraph = paragraph with
+        {
+            Inlines = [new TextInline("AABBCCDD")],
+            TextHash = DocumentTextHash.Compute("AABBCCDD"),
+            SourceSpans = [new SourceSpan(page.Id, "0001", 0, 8)],
+        };
+        var newerDraft = new StructuredDocument(projectId, [newerParagraph], string.Empty);
+        var newerDocument = newerDraft with
+        {
+            DocumentTextHash = DocumentTextHash.Compute(newerDraft),
+        };
+        await repository.SaveDocumentSnapshotAsync(
+            newerDocument,
+            "Confirmed",
+            CancellationToken.None);
+
+        Assert.Equal(
+            annotatedBatchId,
+            await repository.GetLatestRubyBatchWithAnnotationsIdAsync(CancellationToken.None));
+        var history = await repository.LoadRubyBatchHistoryAsync(CancellationToken.None);
+
+        Assert.Equal(2, history.Count);
+        Assert.Equal(emptyBatchId, history[0].BatchId);
+        Assert.Equal(0, history[0].AnnotationCount);
+        var annotated = Assert.Single(history, item => item.BatchId == annotatedBatchId);
+        Assert.Equal(document.DocumentTextHash, annotated.DocumentTextHash);
+        Assert.Equal(RubyPolicy.SuggestDifficultReadings, annotated.Policy);
+        Assert.Equal(3, annotated.AnnotationCount);
+        Assert.Equal(1, annotated.ConfirmedCount);
+        Assert.Equal(1, annotated.ProposedCount);
+        Assert.Equal(1, annotated.StaleCount);
+        Assert.Equal(1, annotated.UnresolvedCount);
+        Assert.False(annotated.IsCurrentDocument);
+        Assert.Equal("Stale", annotated.DocumentState);
+        Assert.NotEqual(default, annotated.ExportedUtc);
+    }
+
     public void Dispose()
     {
         TestFileCleanup.DeleteDirectory(_directory);

@@ -207,6 +207,44 @@ public sealed class MainWindowLayoutTests
             Count(main, "reviewed => service.ValidateReviewed(result.Batch, reviewed)"));
     }
 
+    [Fact]
+    public void Ruby_review_refreshes_candidate_warnings_and_requires_acknowledgement_before_save()
+    {
+        var root = FindRepositoryRoot();
+        var review = File.ReadAllText(Path.Combine(
+            root, "src", "TateScribe.App", "RubyReviewWindow.xaml.cs"));
+
+        Assert.Contains("RefreshValidationIssues(validation.Issues)", review, StringComparison.Ordinal);
+        Assert.Contains("HasNewConfirmedWarnings", review, StringComparison.Ordinal);
+        Assert.Contains("MessageBoxButton.YesNo", review, StringComparison.Ordinal);
+        Assert.Contains("validation.Issues.Where(issue => issue.IsError)", review, StringComparison.Ordinal);
+        Assert.Contains("DialogResult = true", review, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Ruby_batch_history_lists_counts_and_opens_the_selected_annotated_batch()
+    {
+        var root = FindRepositoryRoot();
+        var xaml = File.ReadAllText(Path.Combine(
+            root, "src", "TateScribe.App", "RubyBatchHistoryWindow.xaml"));
+        var code = File.ReadAllText(Path.Combine(
+            root, "src", "TateScribe.App", "RubyBatchHistoryWindow.xaml.cs"));
+        var main = File.ReadAllText(Path.Combine(
+            root, "src", "TateScribe.App", "MainWindow.xaml.cs"));
+
+        Assert.Contains("ExportedUtc", xaml, StringComparison.Ordinal);
+        Assert.Contains("DocumentTextHash", xaml, StringComparison.Ordinal);
+        Assert.Contains("AnnotationCount", xaml, StringComparison.Ordinal);
+        Assert.Contains("ConfirmedCount", xaml, StringComparison.Ordinal);
+        Assert.Contains("ProposedCount", xaml, StringComparison.Ordinal);
+        Assert.Contains("StaleCount", xaml, StringComparison.Ordinal);
+        Assert.Contains("UnresolvedCount", xaml, StringComparison.Ordinal);
+        Assert.Contains("DocumentState", xaml, StringComparison.Ordinal);
+        Assert.Contains("FirstOrDefault(item => item.AnnotationCount > 0)", code, StringComparison.Ordinal);
+        Assert.Contains("LoadRubyBatchHistoryAsync", main, StringComparison.Ordinal);
+        Assert.Contains("LoadReviewAsync", main, StringComparison.Ordinal);
+    }
+
     private static int Count(string value, string fragment)
     {
         var count = 0;

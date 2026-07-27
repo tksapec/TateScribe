@@ -41,7 +41,7 @@
               <Button Padding="8,5" Click="ImportRubyJson"
                       ToolTip="ChatGPTが返したルビJSONを厳格に検証し、候補ごとの確認画面を開きます。エラー時はDBを変更しません。">ルビJSONを取り込んで確認</Button>
               <Button Margin="0,6,0,0" Padding="8,5" Click="ReviewSavedRuby"
-                      ToolTip="直近に保存したルビ候補を再度開き、確定・却下・読み・範囲を見直します。">保存済みルビ候補を確認</Button>
+                      ToolTip="履歴から保存済みルビバッチを選び、確定・却下・読み・範囲を見直します。">保存済みルビ候補を確認</Button>
             </StackPanel>
           </GroupBox>
 

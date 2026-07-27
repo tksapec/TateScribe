@@ -112,13 +112,7 @@ public sealed class RubyWorkflowService
 
     public RubyImportPreview ValidateReviewed(RubyBatchSnapshot batch, RubyImportDocument reviewed)
     {
-        var json = JsonSerializer.Serialize(reviewed, JsonOptions);
-        var validated = new RubyImportValidator().Validate(json,
-            new RubyValidationContext(batch.Document.ProjectId, batch.BatchId, batch.Document, batch.PageMarkers,
-                batch.Policy, batch.ConfirmedTextIsStale, batch.OcrCandidates));
-        return validated.IsValid
-            ? validated with { Result = reviewed }
-            : validated;
+        return ValidateReviewedDocument(batch, reviewed);
     }
 
     public async Task<RubyImportResult?> LoadLatestReviewAsync(
@@ -126,11 +120,59 @@ public sealed class RubyWorkflowService
         CancellationToken cancellationToken)
     {
         await using var repository = await SqliteProjectRepository.CreateAsync(projectDirectory, cancellationToken);
-        var batchId = await repository.GetLatestRubyBatchIdAsync(cancellationToken);
+        var batchId = await repository.GetLatestRubyBatchWithAnnotationsIdAsync(cancellationToken);
         if (batchId is null) return null;
-        var batch = await repository.LoadRubyBatchAsync(batchId.Value, cancellationToken);
-        var annotations = await repository.LoadRubyAnnotationsAsync(batchId.Value, cancellationToken);
-        var unresolved = await repository.LoadRubyUnresolvedItemsAsync(batchId.Value, cancellationToken);
+        return await LoadReviewAsync(repository, batchId.Value, cancellationToken);
+    }
+
+    public async Task<IReadOnlyList<RubyBatchHistoryItem>> LoadRubyBatchHistoryAsync(
+        string projectDirectory,
+        CancellationToken cancellationToken)
+    {
+        await using var repository = await SqliteProjectRepository.CreateAsync(
+            projectDirectory,
+            cancellationToken);
+        return await repository.LoadRubyBatchHistoryAsync(cancellationToken);
+    }
+
+    public async Task<RubyImportResult> LoadReviewAsync(
+        string projectDirectory,
+        Guid batchId,
+        CancellationToken cancellationToken)
+    {
+        await using var repository = await SqliteProjectRepository.CreateAsync(
+            projectDirectory,
+            cancellationToken);
+        return await LoadReviewAsync(repository, batchId, cancellationToken);
+    }
+
+    private RubyImportPreview ValidateReviewedDocument(
+        RubyBatchSnapshot batch,
+        RubyImportDocument reviewed)
+    {
+        var validated = new RubyImportValidator().Validate(
+            reviewed,
+            new RubyValidationContext(
+                batch.Document.ProjectId,
+                batch.BatchId,
+                batch.Document,
+                batch.PageMarkers,
+                batch.Policy,
+                batch.ConfirmedTextIsStale,
+                batch.OcrCandidates));
+        return validated.IsValid
+            ? validated with { Result = reviewed }
+            : validated;
+    }
+
+    private async Task<RubyImportResult> LoadReviewAsync(
+        SqliteProjectRepository repository,
+        Guid batchId,
+        CancellationToken cancellationToken)
+    {
+        var batch = await repository.LoadRubyBatchAsync(batchId, cancellationToken);
+        var annotations = await repository.LoadRubyAnnotationsAsync(batchId, cancellationToken);
+        var unresolved = await repository.LoadRubyUnresolvedItemsAsync(batchId, cancellationToken);
         var import = new RubyImportDocument(1, batch.Document.ProjectId, batch.BatchId,
             batch.Document.DocumentTextHash, annotations, unresolved);
         return new RubyImportResult(batch, ValidateReviewed(batch, import));

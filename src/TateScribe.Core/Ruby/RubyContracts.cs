@@ -127,6 +127,21 @@ public sealed record RubyBatchSnapshot(
     bool ConfirmedTextIsStale,
     IReadOnlyList<RubyOcrCandidate> OcrCandidates);
 
+public sealed record RubyBatchHistoryItem(
+    Guid BatchId,
+    DateTimeOffset ExportedUtc,
+    string DocumentTextHash,
+    RubyPolicy Policy,
+    int AnnotationCount,
+    int ConfirmedCount,
+    int ProposedCount,
+    int StaleCount,
+    int UnresolvedCount,
+    bool IsCurrentDocument)
+{
+    public string DocumentState => IsCurrentDocument ? "Current" : "Stale";
+}
+
 public static class DocumentTextHash
 {
     public static string Compute(string text) =>

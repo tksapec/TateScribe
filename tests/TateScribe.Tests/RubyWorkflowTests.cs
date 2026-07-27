@@ -355,6 +355,160 @@ public sealed class RubyWorkflowTests
             []));
     }
 
+    [Fact]
+    public void Image_confirmation_uses_only_evidence_pages_that_own_the_source_range()
+    {
+        var firstPage = Guid.NewGuid();
+        var secondPage = Guid.NewGuid();
+        var paragraph = new StructuredParagraph(
+            Guid.NewGuid(),
+            DocumentElementRole.BodyParagraph,
+            [new TextInline("AABB")],
+            DocumentTextHash.Compute("AABB"),
+            [
+                new SourceSpan(firstPage, "0001", 0, 2),
+                new SourceSpan(secondPage, "0002", 2, 2),
+            ]);
+        var document = Document(paragraph);
+        var proposal = Proposal(paragraph, 2, 2, "BB", "\u3088\u307f") with
+        {
+            EvidencePageMarkers = ["0001"],
+        };
+        var wrongOccurrence = new RubyOcrCandidate(
+            "0001", "\u3088\u307f", "BB", 10, 20, 30, 40, .95,
+            Guid.NewGuid(), false, false, .95);
+
+        var preview = new RubyImportValidator().Validate(
+            Json(document, proposal),
+            Context(document) with
+            {
+                BatchPageMarkers = new HashSet<string> { "0001", "0002" },
+                OcrCandidates = [wrongOccurrence],
+            });
+
+        Assert.Contains(preview.Issues, issue =>
+            issue.Code == "EvidencePageDoesNotMatchSourceSpan" && !issue.IsError);
+        Assert.Contains(preview.Issues, issue =>
+            issue.Code == "ImageCandidateMismatch" && !issue.IsError);
+    }
+
+    [Theory]
+    [InlineData(.69, .95, false, "LowOcrCandidateConfidence")]
+    [InlineData(.95, .59, false, "LowLinkConfidence")]
+    [InlineData(.95, .95, true, "WrongSideCandidate")]
+    public void Image_confirmation_reports_candidate_trust_warnings(
+        double confidence,
+        double linkConfidence,
+        bool returnedToBody,
+        string expectedCode)
+    {
+        var paragraph = Paragraph("AA");
+        var document = Document(paragraph);
+        var proposal = Proposal(paragraph, 0, 2, "AA", "\u3088\u307f");
+        var candidate = new RubyOcrCandidate(
+            "0001", "\u3088\u307f", "AA", 10, 20, 30, 40, confidence,
+            Guid.NewGuid(), returnedToBody, false, linkConfidence);
+
+        var preview = new RubyImportValidator().Validate(
+            Json(document, proposal),
+            Context(document) with { OcrCandidates = [candidate] });
+
+        Assert.Contains(preview.Issues, issue =>
+            issue.Code == expectedCode && !issue.IsError);
+        Assert.False(RubyBulkConfirmationPolicy.CanConfirm(
+            Assert.Single(preview.Result!.Annotations),
+            RubySource.ImageConfirmed,
+            preview.Issues));
+    }
+
+    [Fact]
+    public void Image_confirmation_accepts_candidate_values_at_the_bulk_thresholds()
+    {
+        Assert.Equal(.70, RubyBulkConfirmationPolicy.MinBulkConfirmAnnotationConfidence);
+        Assert.Equal(.70, RubyBulkConfirmationPolicy.MinBulkConfirmOcrConfidence);
+        Assert.Equal(.60, RubyBulkConfirmationPolicy.MinBulkConfirmLinkConfidence);
+
+        var paragraph = Paragraph("AA");
+        var document = Document(paragraph);
+        var proposal = Proposal(paragraph, 0, 2, "AA", "\u3088\u307f") with
+        {
+            Confidence = RubyBulkConfirmationPolicy.MinBulkConfirmAnnotationConfidence,
+        };
+        var candidate = new RubyOcrCandidate(
+            "0001", "\u3088\u307f", "AA", 10, 20, 30, 40,
+            RubyBulkConfirmationPolicy.MinBulkConfirmOcrConfidence,
+            Guid.NewGuid(), false, false,
+            RubyBulkConfirmationPolicy.MinBulkConfirmLinkConfidence);
+
+        var preview = new RubyImportValidator().Validate(
+            Json(document, proposal),
+            Context(document) with { OcrCandidates = [candidate] });
+
+        Assert.DoesNotContain(preview.Issues, issue =>
+            issue.Code is "LowOcrCandidateConfidence" or "LowLinkConfidence"
+                or "WrongSideCandidate" or "ImageCandidateMismatch"
+                or "BaseTextCandidateUnknown");
+        Assert.True(RubyBulkConfirmationPolicy.CanConfirm(
+            proposal,
+            RubySource.ImageConfirmed,
+            preview.Issues));
+    }
+
+    [Fact]
+    public void Text_confirmation_is_not_restricted_to_the_annotation_source_page()
+    {
+        var paragraph = new StructuredParagraph(
+            Guid.NewGuid(),
+            DocumentElementRole.BodyParagraph,
+            [new TextInline("AA")],
+            DocumentTextHash.Compute("AA"),
+            [new SourceSpan(Guid.NewGuid(), "0001", 0, 2)]);
+        var document = Document(paragraph);
+        var proposal = Proposal(paragraph, 0, 2, "AA", "\u3088\u307f") with
+        {
+            Source = RubySource.TextConfirmed,
+            EvidencePageMarkers = ["0002"],
+        };
+
+        var preview = new RubyImportValidator().Validate(
+            Json(document, proposal),
+            Context(document) with
+            {
+                BatchPageMarkers = new HashSet<string> { "0001", "0002" },
+            });
+
+        Assert.DoesNotContain(preview.Issues, issue =>
+            issue.Code == "EvidencePageDoesNotMatchSourceSpan");
+    }
+
+    [Fact]
+    public void Issue_matching_uses_annotation_id_before_source_range_fallback()
+    {
+        var paragraph = Paragraph("AA");
+        var first = Proposal(paragraph, 0, 2, "AA", "\u3088\u307f") with
+        {
+            AnnotationId = Guid.NewGuid(),
+        };
+        var second = first with { AnnotationId = Guid.NewGuid() };
+        var issue = new RubyValidationIssue(
+            "LowLinkConfidence",
+            "warning",
+            false,
+            first.ParagraphId,
+            first.Start,
+            first.Length,
+            first.AnnotationId);
+
+        Assert.True(RubyBulkConfirmationPolicy.Matches(issue, first));
+        Assert.False(RubyBulkConfirmationPolicy.Matches(issue, second));
+        Assert.False(RubyBulkConfirmationPolicy.Matches(
+            issue with { AnnotationId = null },
+            first));
+        Assert.True(RubyBulkConfirmationPolicy.Matches(
+            issue with { AnnotationId = null },
+            first with { AnnotationId = Guid.Empty }));
+    }
+
     private static readonly Guid BatchId = Guid.NewGuid();
     private static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.Web)
     {

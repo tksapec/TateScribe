@@ -10,12 +10,14 @@
 8. Open `ChatGPTへの指示`, select `ルビ確認`, and copy the prompt.
 9. Give ChatGPT the ruby package and prompt.
 10. Import the returned JSON. A validation error leaves the database unchanged.
-11. Review each ruby proposal. The body is read-only here. Confirm/reject proposals, edit parent ranges/readings, inspect every matching OCR coordinate and candidate warning, and review unresolved items. A warning-free image/text candidate with confidence 0.7 or higher can be bulk-confirmed; suggested, ambiguous, mismatched, low-confidence, stale, and rejected items cannot.
+11. Review each ruby proposal. The body is read-only here. Confirm/reject proposals, edit parent ranges/readings, inspect every matching OCR coordinate and candidate warning, and review unresolved items. `ImageConfirmed` means that the reading and linked parent text match an OCR candidate on a page owning the annotation's source range. Bulk confirmation requires annotation confidence 0.70, OCR confidence 0.70, link confidence 0.60, non-empty evidence, and no candidate warning. Individual visual confirmation remains available. Saving revalidates edited ranges and readings; errors keep the window open, and a newly warned Confirmed item requires explicit acknowledgement.
 12. Export the ruby-enabled DOCX. The common preflight shows unproofread, Other, empty pages, and ruby states. Only confirmed, non-stale ruby is included.
 13. Enter metadata and export the Denden Converter folder. Enable `挿絵ページを含める` only when `Illustration` pages should be included. Open its `upload` folder and select every file inside it together when uploading; never select the root `README.txt`.
 14. Use Denden Converter to create EPUB outside TateScribe.
 
 If the body changes after a ruby package was exported, TateScribe marks the associated ruby stale. Export a new package and review the new positions; TateScribe does not reattach ruby by blind text search.
+
+`保存済みルビ候補を確認` opens the ruby batch history. It initially selects the newest batch that actually contains annotations, even when a newer package export has not been imported. Select an older annotated batch to review it. The table shows exported UTC, batch ID, document hash, policy, annotation/status counts, unresolved count, and whether the batch belongs to the current document.
 
 The main sidebar scrolls independently. If all commands do not fit vertically, use its scrollbar; the page list and page-order controls remain available below it.
 

@@ -25,6 +25,13 @@ public sealed class RubyImportValidator
         }
         if (document is null) return Invalid("InvalidJson", "JSONのルートがありません。");
 
+        return Validate(document, context);
+    }
+
+    public RubyImportPreview Validate(
+        RubyImportDocument document,
+        RubyValidationContext context)
+    {
         var issues = new List<RubyValidationIssue>();
         ErrorIf(document.FormatVersion != 1, "FormatVersion", "formatVersionは1である必要があります。");
         ErrorIf(document.ProjectId != context.ProjectId, "ProjectId", "projectIdが現在のプロジェクトと一致しません。");
@@ -87,12 +94,12 @@ public sealed class RubyImportValidator
 
             if (annotation.Source is RubySource.DictionarySuggested or RubySource.ContextSuggested)
                 AddFor(annotation, "SuggestedReading", "辞書または文脈だけを根拠にした候補です。", false);
-            if (annotation.Confidence < 0.7)
+            if (annotation.Confidence < RubyBulkConfirmationPolicy.MinBulkConfirmAnnotationConfidence)
                 AddFor(annotation, "LowConfidence", "confidenceが低い候補です。", false);
             if (RubyTextNormalizer.NormalizeReading(annotation.Reading).Any(character => !IsKana(character)))
                 AddFor(annotation, "NonKanaReading", "readingにひらがな・カタカナ以外が含まれます。", false);
-            if (annotation.Source == RubySource.ImageConfirmed)
-                ValidateImageCandidate(annotation);
+            if (annotation.Source == RubySource.ImageConfirmed && paragraph is not null)
+                ValidateImageCandidate(annotation, paragraph);
         }
         foreach (var group in (document.Annotations ?? []).GroupBy(item => item.BaseText, StringComparer.Ordinal)
             .Where(group => group.Select(item => item.Reading).Distinct(StringComparer.Ordinal).Count() > 1))
@@ -122,7 +129,115 @@ public sealed class RubyImportValidator
 
         return new RubyImportPreview(document, issues);
 
-        void ValidateImageCandidate(RubyAnnotationProposal annotation)
+        void ValidateImageCandidate(
+            RubyAnnotationProposal annotation,
+            StructuredParagraph paragraph)
+        {
+            var annotationEnd = (long)annotation.Start + annotation.Length;
+            var sourcePageMarkers = paragraph.SourceSpans
+                .Where(span =>
+                    span.Start < annotationEnd
+                    && (long)span.Start + span.Length > annotation.Start)
+                .Select(span => span.PageMarker)
+                .ToHashSet(StringComparer.Ordinal);
+            var evidencePageMarkers = annotation.EvidencePageMarkers ?? [];
+            if (sourcePageMarkers.Count == 0
+                || evidencePageMarkers.Any(marker => !sourcePageMarkers.Contains(marker)))
+                AddFor(
+                    annotation,
+                    "EvidencePageDoesNotMatchSourceSpan",
+                    "The image evidence page does not own the annotation source text range.",
+                    false);
+
+            var pageCandidates = (context.OcrCandidates ?? [])
+                .Where(candidate =>
+                    sourcePageMarkers.Contains(candidate.PageMarker)
+                    && evidencePageMarkers.Contains(candidate.PageMarker, StringComparer.Ordinal))
+                .ToArray();
+            var reading = RubyTextNormalizer.NormalizeReading(annotation.Reading);
+            var readingMatches = pageCandidates
+                .Where(candidate => string.Equals(
+                    RubyTextNormalizer.NormalizeReading(candidate.ReadingCandidate),
+                    reading,
+                    StringComparison.Ordinal))
+                .ToArray();
+            if (readingMatches.Length == 0)
+            {
+                AddFor(
+                    annotation,
+                    "ImageCandidateMismatch",
+                    "No OCR candidate on the source page matches the proposed reading.",
+                    false);
+                return;
+            }
+
+            var baseMatches = readingMatches
+                .Where(candidate =>
+                    candidate.BaseTextCandidate is not null
+                    && string.Equals(
+                        candidate.BaseTextCandidate,
+                        annotation.BaseText,
+                        StringComparison.Ordinal))
+                .ToArray();
+            if (baseMatches.Length == 0)
+            {
+                if (sourcePageMarkers.SetEquals(evidencePageMarkers))
+                {
+                    AddCandidateMismatchIssue(annotation);
+                    return;
+                }
+                AddFor(
+                    annotation,
+                    readingMatches.All(candidate => candidate.BaseTextCandidate is null)
+                        ? "BaseTextCandidateUnknown"
+                        : "ImageCandidateMismatch",
+                    readingMatches.All(candidate => candidate.BaseTextCandidate is null)
+                        ? "The OCR evidence has no linked parent-text candidate."
+                        : "The OCR parent-text candidate does not match the annotation source range.",
+                    false);
+                return;
+            }
+
+            var rightSideCandidates = baseMatches
+                .Where(candidate => !candidate.ReturnedToBody)
+                .ToArray();
+            if (rightSideCandidates.Length == 0)
+            {
+                AddFor(
+                    annotation,
+                    "WrongSideCandidate",
+                    "The matching OCR candidate was returned to the body-text side.",
+                    false);
+                return;
+            }
+
+            var confidentCandidates = rightSideCandidates
+                .Where(candidate =>
+                    candidate.Confidence
+                        >= RubyBulkConfirmationPolicy.MinBulkConfirmOcrConfidence)
+                .ToArray();
+            if (confidentCandidates.Length == 0)
+            {
+                AddFor(
+                    annotation,
+                    "LowOcrCandidateConfidence",
+                    "The matching OCR candidate confidence is below the bulk-confirmation threshold.",
+                    false);
+                return;
+            }
+
+            if (confidentCandidates.All(candidate =>
+                    candidate.LinkConfidence is null
+                    || candidate.LinkConfidence
+                        < RubyBulkConfirmationPolicy.MinBulkConfirmLinkConfidence))
+                AddFor(
+                    annotation,
+                    "LowLinkConfidence",
+                    "The matching OCR parent-text link confidence is below the bulk-confirmation threshold.",
+                    false);
+        }
+
+        void AddCandidateMismatchIssue(RubyAnnotationProposal annotation)
         {
             var pageCandidates = (context.OcrCandidates ?? [])
                 .Where(candidate => (annotation.EvidencePageMarkers ?? [])

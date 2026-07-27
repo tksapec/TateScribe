@@ -900,6 +900,88 @@ public sealed class SqliteProjectRepository : IAsyncDisposable
         return Guid.TryParse(await command.ExecuteScalarAsync(cancellationToken) as string, out var id) ? id : null;
     }
 
+    public async Task<Guid?> GetLatestRubyBatchWithAnnotationsIdAsync(
+        CancellationToken cancellationToken)
+    {
+        var projectId = await GetProjectIdAsync(cancellationToken);
+        var command = _connection.CreateCommand();
+        command.CommandText = """
+            SELECT b.id
+            FROM ruby_batches b
+            WHERE b.project_id = $projectId
+              AND EXISTS (
+                  SELECT 1
+                  FROM ruby_annotations a
+                  WHERE a.batch_id = b.id)
+            ORDER BY b.exported_utc DESC, b.rowid DESC
+            LIMIT 1;
+            """;
+        command.Parameters.AddWithValue("$projectId", projectId.ToString("D"));
+        return Guid.TryParse(
+            await command.ExecuteScalarAsync(cancellationToken) as string,
+            out var id)
+            ? id
+            : null;
+    }
+
+    public async Task<IReadOnlyList<RubyBatchHistoryItem>> LoadRubyBatchHistoryAsync(
+        CancellationToken cancellationToken)
+    {
+        var projectId = await GetProjectIdAsync(cancellationToken);
+        var command = _connection.CreateCommand();
+        command.CommandText = """
+            SELECT b.id,
+                   b.exported_utc,
+                   s.document_text_hash,
+                   b.ruby_policy,
+                   COUNT(a.id) AS annotation_count,
+                   COALESCE(SUM(CASE WHEN a.status = 'Confirmed' THEN 1 ELSE 0 END), 0),
+                   COALESCE(SUM(CASE WHEN a.status = 'Proposed' THEN 1 ELSE 0 END), 0),
+                   COALESCE(SUM(CASE WHEN a.status = 'Stale' THEN 1 ELSE 0 END), 0),
+                   (
+                       SELECT COUNT(*)
+                       FROM ruby_unresolved_items u
+                       WHERE u.batch_id = b.id
+                   ) AS unresolved_count,
+                   CASE
+                       WHEN b.confirmed_text_stale = 0
+                        AND b.document_snapshot_id = (
+                            SELECT current_snapshot.id
+                            FROM document_snapshots current_snapshot
+                            WHERE current_snapshot.project_id = b.project_id
+                            ORDER BY current_snapshot.created_utc DESC,
+                                     current_snapshot.rowid DESC
+                            LIMIT 1
+                        )
+                       THEN 1
+                       ELSE 0
+                   END AS is_current_document
+            FROM ruby_batches b
+            JOIN document_snapshots s ON s.id = b.document_snapshot_id
+            LEFT JOIN ruby_annotations a ON a.batch_id = b.id
+            WHERE b.project_id = $projectId
+            GROUP BY b.id, b.exported_utc, s.document_text_hash, b.ruby_policy,
+                     b.confirmed_text_stale, b.document_snapshot_id
+            ORDER BY b.exported_utc DESC, b.rowid DESC;
+            """;
+        command.Parameters.AddWithValue("$projectId", projectId.ToString("D"));
+        var items = new List<RubyBatchHistoryItem>();
+        await using var reader = await command.ExecuteReaderAsync(cancellationToken);
+        while (await reader.ReadAsync(cancellationToken))
+            items.Add(new RubyBatchHistoryItem(
+                Guid.Parse(reader.GetString(0)),
+                DateTimeOffset.Parse(reader.GetString(1), CultureInfo.InvariantCulture),
+                reader.GetString(2),
+                Enum.Parse<RubyPolicy>(reader.GetString(3)),
+                reader.GetInt32(4),
+                reader.GetInt32(5),
+                reader.GetInt32(6),
+                reader.GetInt32(7),
+                reader.GetInt32(8),
+                reader.GetInt32(9) != 0));
+        return items;
+    }
+
     public async Task<(int Confirmed, int Proposed, int Stale, int Unresolved)>
         GetRubyPreflightCountsAsync(
             Guid snapshotId,

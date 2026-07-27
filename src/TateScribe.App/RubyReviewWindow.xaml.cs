@@ -115,15 +115,13 @@ public partial class RubyReviewWindow : Window
         var current = ReviewedDocument;
         var validation = validateReviewed?.Invoke(current)
             ?? new RubyImportPreview(current, annotations.SelectMany(item => item.Issues).ToArray());
+        RefreshValidationIssues(validation.Issues);
+        AnnotationGrid.Items.Refresh();
         if (!validation.IsValid) return;
         foreach (var item in annotations)
         {
             var proposal = item.ToProposal();
-            var issues = validation.Issues
-                .Where(issue => RubyBulkConfirmationPolicy.Matches(issue, proposal))
-                .ToArray();
-            item.UpdateIssues(issues);
-            if (RubyBulkConfirmationPolicy.CanConfirm(proposal, source, issues))
+            if (RubyBulkConfirmationPolicy.CanConfirm(proposal, source, item.Issues))
                 item.Status = RubyAnnotationStatus.Confirmed;
         }
         AnnotationGrid.Items.Refresh();
@@ -148,7 +146,45 @@ public partial class RubyReviewWindow : Window
         AnnotationGrid.CommitEdit(DataGridEditingUnit.Row, true);
         try
         {
-            _ = annotations.Select(view => view.ToProposal()).ToArray();
+            var current = ReviewedDocument;
+            var validation = validateReviewed?.Invoke(current)
+                ?? new RubyImportPreview(
+                    current,
+                    annotations.SelectMany(item => item.Issues).ToArray());
+            RefreshValidationIssues(validation.Issues);
+            AnnotationGrid.Items.Refresh();
+            var errors = validation.Issues.Where(issue => issue.IsError).ToArray();
+            if (errors.Length > 0)
+            {
+                MessageBox.Show(
+                    this,
+                    string.Join(Environment.NewLine, errors.Select(issue => $"- {issue.Message}")),
+                    "Ruby validation",
+                    MessageBoxButton.OK,
+                    MessageBoxImage.Warning);
+                return;
+            }
+            if (HasNewConfirmedWarnings())
+            {
+                var warnings = annotations
+                    .Where(item =>
+                        item.Status == RubyAnnotationStatus.Confirmed
+                        && item.HasNewWarnings)
+                    .SelectMany(item => item.Issues.Where(issue => !issue.IsError))
+                    .Select(issue => $"- {issue.Message}")
+                    .Distinct(StringComparer.Ordinal);
+                var acknowledged = MessageBox.Show(
+                    this,
+                    "Confirmed candidates have new warnings."
+                    + Environment.NewLine
+                    + string.Join(Environment.NewLine, warnings)
+                    + Environment.NewLine
+                    + "Save them as Confirmed after reviewing these warnings?",
+                    "Ruby warning acknowledgement",
+                    MessageBoxButton.YesNo,
+                    MessageBoxImage.Warning);
+                if (acknowledged != MessageBoxResult.Yes) return;
+            }
             DialogResult = true;
         }
         catch (ArgumentOutOfRangeException)
@@ -162,6 +198,23 @@ public partial class RubyReviewWindow : Window
         }
     }
 
+    private void RefreshValidationIssues(IReadOnlyList<RubyValidationIssue> issues)
+    {
+        foreach (var item in annotations)
+        {
+            var proposal = item.ToProposal();
+            item.UpdateIssues(
+                issues
+                    .Where(issue => RubyBulkConfirmationPolicy.Matches(issue, proposal))
+                    .ToArray());
+        }
+    }
+
+    private bool HasNewConfirmedWarnings() =>
+        annotations.Any(item =>
+            item.Status == RubyAnnotationStatus.Confirmed
+            && item.HasNewWarnings);
+
     private void CancelReview(object sender, RoutedEventArgs e) => DialogResult = false;
 
     private sealed record RubyImportResultSource(
@@ -173,6 +226,7 @@ public partial class RubyReviewWindow : Window
     {
         private readonly RubyAnnotationProposal original;
         private readonly string paragraphText;
+        private readonly HashSet<string> initialWarningKeys;
         public RubyAnnotationView(
             RubyAnnotationProposal original,
             string warning,
@@ -192,6 +246,10 @@ public partial class RubyReviewWindow : Window
             Status = original.Status;
             Warning = warning;
             Issues = issues;
+            initialWarningKeys = issues
+                .Where(issue => !issue.IsError)
+                .Select(WarningKey)
+                .ToHashSet(StringComparer.Ordinal);
         }
         public string ParagraphId { get; }
         public int Start { get; set; }
@@ -209,6 +267,10 @@ public partial class RubyReviewWindow : Window
         public RubyAnnotationStatus Status { get; set; }
         public string Warning { get; private set; }
         public IReadOnlyList<RubyValidationIssue> Issues { get; private set; }
+        public bool HasNewWarnings => Issues
+            .Where(issue => !issue.IsError)
+            .Select(WarningKey)
+            .Any(key => !initialWarningKeys.Contains(key));
         public void UpdateIssues(IReadOnlyList<RubyValidationIssue> issues)
         {
             Issues = issues;
@@ -227,5 +289,8 @@ public partial class RubyReviewWindow : Window
                 Status = Status,
             };
         }
+
+        private static string WarningKey(RubyValidationIssue issue) =>
+            $"{issue.Code}\0{issue.Message}";
     }
 }

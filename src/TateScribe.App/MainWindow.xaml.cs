@@ -476,7 +476,7 @@ public partial class MainWindow : Window
         try
         {
             var service = new RubyWorkflowService();
-            var result = await service.LoadLatestReviewAsync(_projectDirectory, CancellationToken.None);
+            var result = await SelectRubyBatchAsync(service, _projectDirectory);
             if (result is null || result.Preview.Result is null)
             {
                 MessageBox.Show(this, "保存済みのルビ候補はありません。先にルビJSONを取り込んでください。",
@@ -511,6 +511,24 @@ public partial class MainWindow : Window
         {
             MessageBox.Show(this, exception.Message, "保存済みルビ候補を開けません", MessageBoxButton.OK, MessageBoxImage.Error);
         }
+    }
+
+    private async Task<RubyImportResult?> SelectRubyBatchAsync(
+        RubyWorkflowService service,
+        string projectDirectory)
+    {
+        var history = await service.LoadRubyBatchHistoryAsync(
+            projectDirectory,
+            CancellationToken.None);
+        var historyWindow = new RubyBatchHistoryWindow(history) { Owner = this };
+        if (historyWindow.SelectedBatch is null
+            || historyWindow.ShowDialog() != true
+            || historyWindow.SelectedBatch is not { } selectedBatch)
+            return null;
+        return await service.LoadReviewAsync(
+            projectDirectory,
+            selectedBatch.BatchId,
+            CancellationToken.None);
     }
 
     private async void ExportDocx(object sender, RoutedEventArgs e)
