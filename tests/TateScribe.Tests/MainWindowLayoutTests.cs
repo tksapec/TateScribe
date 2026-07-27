@@ -222,6 +222,23 @@ public sealed class MainWindowLayoutTests
     }
 
     [Fact]
+    public void Fresh_ruby_import_revalidates_after_assigning_annotation_ids()
+    {
+        var root = FindRepositoryRoot();
+        var workflow = File.ReadAllText(Path.Combine(
+            root, "src", "TateScribe.App", "Services", "RubyWorkflowService.cs"));
+
+        Assert.Contains(
+            "preview = ValidateReviewed(batch, identified);",
+            workflow,
+            StringComparison.Ordinal);
+        Assert.DoesNotContain(
+            "preview = preview with { Result = identified };",
+            workflow,
+            StringComparison.Ordinal);
+    }
+
+    [Fact]
     public void Ruby_batch_history_lists_counts_and_opens_the_selected_annotated_batch()
     {
         var root = FindRepositoryRoot();

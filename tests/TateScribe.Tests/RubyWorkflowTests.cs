@@ -509,6 +509,46 @@ public sealed class RubyWorkflowTests
             first with { AnnotationId = Guid.Empty }));
     }
 
+    [Fact]
+    public void Fresh_json_warning_binds_after_annotation_id_assignment_and_revalidation()
+    {
+        var paragraph = Paragraph("AA");
+        var document = Document(paragraph);
+        var proposal = Proposal(paragraph, 0, 2, "AA", "\u3088\u307f");
+        var candidate = new RubyOcrCandidate(
+            "0001", "\u3088\u307f", "AA", 10, 20, 30, 40, .69,
+            Guid.NewGuid(), false, false, .95);
+        var context = Context(document) with { OcrCandidates = [candidate] };
+        var validator = new RubyImportValidator();
+
+        var initial = validator.Validate(Json(document, proposal), context);
+        var initialWarning = Assert.Single(
+            initial.Issues,
+            issue => issue.Code == "LowOcrCandidateConfidence");
+        Assert.Null(initialWarning.AnnotationId);
+        var assignedId = Guid.NewGuid();
+        var identified = initial.Result! with
+        {
+            Annotations =
+            [
+                Assert.Single(initial.Result.Annotations) with
+                {
+                    AnnotationId = assignedId,
+                },
+            ],
+        };
+
+        var refreshed = validator.Validate(identified, context);
+
+        var warning = Assert.Single(
+            refreshed.Issues,
+            issue => issue.Code == "LowOcrCandidateConfidence");
+        Assert.Equal(assignedId, warning.AnnotationId);
+        Assert.True(RubyBulkConfirmationPolicy.Matches(
+            warning,
+            Assert.Single(identified.Annotations)));
+    }
+
     private static readonly Guid BatchId = Guid.NewGuid();
     private static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.Web)
     {

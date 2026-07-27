@@ -93,7 +93,7 @@ public sealed class RubyWorkflowService
                 Annotations = preview.Result.Annotations
                     .Select(item => item with { AnnotationId = Guid.NewGuid() }).ToArray(),
             };
-            preview = preview with { Result = identified };
+            preview = ValidateReviewed(batch, identified);
         }
         return new RubyImportResult(batch, preview);
     }

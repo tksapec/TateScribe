@@ -16,3 +16,7 @@
 - Hardened Denden uploads with a root instruction README and upload-only assets, semantic-safe Markdown escaping, an exact 100-file upload boundary, and rotated/cropped illustration PNG preparation.
 - Made the main sidebar scrollable and widened/labeled all four crop-percentage inputs.
 - Excluded the minimal `SlowZip` test from standard test runs and added `package.ps1 -SkipArchive`.
+- Added resumable OCR planning that skips Completed/ReviewRequired pages, retries persisted incomplete states, preserves per-page successes across cancellation/failure, and retains diagnostic failure history; full re-OCR remains an explicit operation.
+- Hardened ImageConfirmed against paragraph source spans and OCR reading/parent/side evidence with centralized 0.70 annotation, 0.70 OCR, and 0.60 link thresholds.
+- Revalidated edited and freshly identified ruby imports so candidate warnings bind by AnnotationId, block save on errors, and require acknowledgement for newly warned Confirmed items.
+- Added read-only ruby batch history with latest-annotated initial selection, status/unresolved counts, historical batch opening, and current-document staleness.

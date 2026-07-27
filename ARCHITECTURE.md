@@ -41,7 +41,8 @@ public interface IDocumentExporter
 
 - `ProofreadingPackageService` selects provenance-aware text, combines stored ReviewItems, prepares optional crop images, exports format 2, and records the DB snapshot.
 - `ProofreadingImportService` reads text/ZIP input, invokes the strict versioned parser, calculates page diffs, and saves only accepted non-error pages.
-- `OcrOrchestrationService` owns the persistent JSON Lines worker for a batch, records stage-specific failures, and continues after page-local failures.
+- `OcrRunPlanner` and `OcrPageSelectionPolicy` select ordered work before worker startup. Resume targets included `NotProcessed`, `Failed`, and leftover `Processing` pages while skipping `Completed` and `ReviewRequired`; reprocess-all is a separate explicit mode.
+- `OcrOrchestrationService` owns the persistent JSON Lines worker for a batch, commits each successful page, records stage-specific failure history, and continues after page-local failures. Cancellation records diagnostics and restores the interrupted page's prior meaningful status without rolling back earlier pages.
 - `DocumentExportService` applies PageRole policy and boundary joins before Open XML generation.
 - `PageValidationService` is a pure Core validator; SQLite stores its results in `review_items`.
 
@@ -58,6 +59,10 @@ The Python worker remains offline and process-local. PaddleOCR is lazily cached 
 
 OCR `RubyCandidate` regions remain OCR evidence and are never treated as final ruby. ChatGPT imports become `RubyAnnotationProposal` records. Only user-confirmed annotations are composed into structured paragraphs. Manual or imported body changes mark affected batches and annotations stale.
 
+`RubyImportValidator` intersects ImageConfirmed annotation ranges with paragraph source spans before matching evidence-page OCR candidates. The centralized `RubyBulkConfirmationPolicy` owns the 0.70 annotation, 0.70 OCR, and 0.60 link thresholds and rejects any candidate-scoped warning during bulk confirmation. TextConfirmed intentionally does not use the image source-page restriction. Fresh imports assign annotation IDs and immediately revalidate the identified in-memory document so warning bindings use IDs; only truly ID-less candidates fall back to paragraph/range matching.
+
+`RubyReviewWindow` repeats validation after edits and before closing. Errors block save. Newly introduced warnings on Confirmed rows require explicit acknowledgement and never silently downgrade status. `RubyBatchHistoryWindow` consumes a read-only repository aggregate over existing schema-v9 tables, selects the latest annotated batch rather than an empty newer export, and exposes historical state counts and current-document staleness.
+
 SQLite schema version 9 preserves document snapshots, paragraphs, provenance spans, ruby batches and evidence snapshots, annotations, annotation/unresolved evidence pages, and the automatic OCR role used to distinguish a true RubyCandidate-to-Body return. `RubyCandidateLinker` uses vertical overlap, horizontal distance, region height, and text length; ambiguous links remain null. Migrations run in the existing initialization transaction. Paragraph logical keys persist independently from displayed text so ordinary text corrections can retain the same paragraph ID.
 
 ## ChatGPT boundary
@@ -71,3 +76,5 @@ TateScribe does not call the ChatGPT API. `ChatGptPromptTemplateProvider` is the
 `DendenDocumentAssembler` interleaves confirmed paragraphs and explicitly selected illustration blocks without splitting a cross-page joined paragraph. `DendenImageProcessor` preserves full-crop/unrotated PNG/JPEG/GIF, transforms rotated/cropped illustrations in rotated coordinates to deterministic PNG, converts other decodable input to PNG, and applies the 3 MiB limit after preparation. `DendenExportService` writes a root instruction-only `README.txt` and upload-only referenced assets, official version-1.0 YAML, UTF-8 without BOM, LF line endings, fixed file/property ordering, inline ruby, and escaped source markup. A one-use prepared plan carries validated image bytes from UI preflight to export. It does not generate EPUB or ZIP.
 
 `ExportPreflightResult` is shared by DOCX and Denden UI paths. It reports page and ruby-state counts and export-specific issues before filesystem output begins.
+
+Standard tests exclude `Category=SlowZip`; normal Release artifact verification calls `package.ps1 -SkipArchive`. Archive creation is an explicit, separate operation.
