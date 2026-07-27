@@ -41,6 +41,20 @@ public sealed class WordRubyMetricsTests
         Assert.Contains("manual Word visual verification", File.ReadAllText(Path.Combine(root, "docs", "ADR-0001-structured-ruby-boundary.md")), StringComparison.Ordinal);
     }
 
+    [Fact]
+    public void Documentation_explains_the_provisional_half_point_raise_formula()
+    {
+        var root = FindRepositoryRoot();
+
+        foreach (var path in new[] { "README.md", "USER_GUIDE.md" })
+        {
+            var text = File.ReadAllText(Path.Combine(root, path));
+            Assert.Contains("hpsRaise = rubyFontSizeHalfPoints + wordOffsetPoints * 2", text, StringComparison.Ordinal);
+            Assert.Contains("half-points", text, StringComparison.Ordinal);
+            Assert.Contains("not a direct equivalence with Word's displayed offset", text, StringComparison.Ordinal);
+        }
+    }
+
     private static string FindRepositoryRoot()
     {
         var directory = new DirectoryInfo(AppContext.BaseDirectory);

@@ -17,7 +17,7 @@
 
 ## Word ruby offset and review selection
 
-The Word ruby offset has a 3pt default and accepts whole numbers from 0 through 20. TateScribe calculates the raise provisionally from the ruby font size and this offset; change the offset, then re-export the DOCX. Inspect the re-exported document in Word. XML diagnostics do not replace manual Word visual verification, and B/C comparison remains pending until Word-saved reference files are available.
+The Word ruby offset has a 3pt default and accepts whole numbers from 0 through 20. TateScribe calculates the raise provisionally in half-points: `hpsRaise = rubyFontSizeHalfPoints + wordOffsetPoints * 2`. This is not a direct equivalence with Word's displayed offset. Change the offset, then re-export the DOCX and inspect the re-exported document in Word. XML diagnostics do not replace manual Word visual verification, and B/C comparison remains pending until Word-saved reference files are available.
 
 In the ruby grid, use Ctrl/Shift for extended selection. Ctrl+Enter confirms the selected rows after pending edits are committed. The Confirm and Reject buttons operate only on those selected rows; rejection is button-only and has no Delete-key shortcut. Image-based and text-based bulk confirmation are deliberately separate. Each bulk result reports examined, newly confirmed, already confirmed, wrong-source, and excluded counts, with an exclusion-reason breakdown. The summary includes the selected count.
 
