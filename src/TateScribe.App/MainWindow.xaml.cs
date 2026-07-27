@@ -63,8 +63,7 @@ public partial class MainWindow : Window
             _pages = (await repository.LoadPagesAsync(CancellationToken.None)).ToList();
             RefreshPages();
             var missingSourceCount = _pages.Count(page => !File.Exists(page.SourcePath));
-            if (missingSourceCount > 0) ReviewStatus.Text = $"要確認: 元画像が見つからないページが {missingSourceCount} 件あります。";
-            else ShowRemainingProcessingCount();
+            ShowProjectLoadStatus(missingSourceCount);
         }
     }
 
@@ -697,9 +696,10 @@ public partial class MainWindow : Window
                     TextSourceStatus.Text = "表示中: 補正候補（PaddleOCR原本と座標は保持されています）";
                 }
             }
-            ReviewStatus.Text = result.Failures.Count == 0
-                ? $"OCR完了: {plan.Targets.Count} ページ"
-                : $"OCR完了: {result.SucceededCount}/{plan.Targets.Count} ページ（失敗: {string.Join(", ", result.Failures.Select(failure => $"{failure.FileName}: {failure.Stage} {failure.Message}"))}）";
+            var completionStatus = $"OCR完了: 成功: {result.SucceededCount}、失敗: {result.Failures.Count}、スキップ: {plan.SkippedCount}";
+            if (result.Failures.Count > 0)
+                completionStatus += $"（失敗詳細: {string.Join(", ", result.Failures.Select(failure => $"{failure.FileName}: {failure.Stage} {failure.Message}"))}）";
+            ReviewStatus.Text = completionStatus;
             await using var repository = await SqliteProjectRepository.CreateAsync(projectDirectory, CancellationToken.None);
             _pages = (await repository.LoadPagesAsync(CancellationToken.None)).ToList();
             RefreshPages();
@@ -743,10 +743,14 @@ public partial class MainWindow : Window
             MessageBoxImage.Warning) == MessageBoxResult.Yes;
     }
 
-    private void ShowRemainingProcessingCount()
+    private void ShowProjectLoadStatus(int missingSourceCount)
     {
         var remaining = _pages.Count(page => page.OcrStatus == OcrStatus.Processing);
-        if (remaining > 0)
+        if (missingSourceCount > 0 && remaining > 0)
+            ReviewStatus.Text = $"要確認: 元画像が見つからないページが {missingSourceCount} 件あります。前回のOCR処理中のまま残っているページが {remaining} 件あります。未完了ページから再開できます。";
+        else if (missingSourceCount > 0)
+            ReviewStatus.Text = $"要確認: 元画像が見つからないページが {missingSourceCount} 件あります。";
+        else if (remaining > 0)
             ReviewStatus.Text = $"前回のOCR処理中のまま残っているページが {remaining} 件あります。未完了ページから再開できます。";
     }
 

@@ -175,6 +175,18 @@ public sealed class MainWindowLayoutTests
     }
 
     [Fact]
+    public void Main_window_reports_complete_ocr_counts_and_project_open_processing_status()
+    {
+        var root = FindRepositoryRoot();
+        var source = File.ReadAllText(Path.Combine(root, "src", "TateScribe.App", "MainWindow.xaml.cs"));
+
+        Assert.Contains("ShowProjectLoadStatus(missingSourceCount)", source, StringComparison.Ordinal);
+        Assert.Contains("成功: {result.SucceededCount}、失敗: {result.Failures.Count}、スキップ: {plan.SkippedCount}", source, StringComparison.Ordinal);
+        Assert.Contains("if (result.Failures.Count > 0)", source, StringComparison.Ordinal);
+        Assert.Contains("failure.FileName}: {failure.Stage} {failure.Message}", source, StringComparison.Ordinal);
+    }
+
+    [Fact]
     public void Ruby_review_revalidates_saved_and_live_edited_candidates()
     {
         var root = FindRepositoryRoot();

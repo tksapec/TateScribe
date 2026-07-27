@@ -45,3 +45,36 @@ dotnet test tests\TateScribe.Tests\TateScribe.Tests.csproj --no-restore --filter
 - Confirmed the pre-existing `_ocrCancellation` guard still prevents concurrent runs, and all three start controls are disabled while OCR runs.
 - Confirmed only planned targets reach the orchestration service; no persistence/cancellation code path was changed.
 - Confirmed no release ZIP was created.
+
+## Review-fix TDD evidence
+
+### RED
+
+Updated the reprocess-all expectation to include an excluded page, added skipped-total assertions, and added source-layout coverage for completion counts and project-open processing reporting. The focused command failed as expected because `OcrRunPlan` did not contain `SkippedCount`:
+
+```text
+error CS1061: 'OcrRunPlan' does not contain a definition for 'SkippedCount'
+```
+
+Command:
+
+```powershell
+dotnet test tests\TateScribe.Tests\TateScribe.Tests.csproj --no-restore --filter "FullyQualifiedName~OcrRunPlannerTests|FullyQualifiedName~MainWindowLayoutTests.Main_window_reports_complete_ocr_counts_and_project_open_processing_status"
+```
+
+### GREEN
+
+- Reprocess-all now targets every page, preserving the previous all-page behavior; only resume treats excluded pages as skipped.
+- `OcrRunPlan.SkippedCount` totals the three explicit skipped categories.
+- Completion status always reports success, failure (including zero), and skipped counts; failure details remain appended when failures exist.
+- Project open calls a read-only status formatter unconditionally, so missing sources and leftover `Processing` pages are reported together when both exist.
+
+The same focused command passed: 5 passed, 0 failed.
+
+Full verification after the review fix:
+
+```powershell
+dotnet test -c Release --no-restore
+```
+
+Result: 217 passed, 0 failed, 0 skipped.

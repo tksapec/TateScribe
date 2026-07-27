@@ -14,7 +14,10 @@ public sealed record OcrRunPlan(
     int ExcludedSkippedCount,
     int FailedTargetCount,
     int ProcessingTargetCount,
-    int NotProcessedTargetCount);
+    int NotProcessedTargetCount)
+{
+    public int SkippedCount => CompletedSkippedCount + ReviewRequiredSkippedCount + ExcludedSkippedCount;
+}
 
 public static class OcrPageSelectionPolicy
 {
@@ -22,7 +25,7 @@ public static class OcrPageSelectionPolicy
     {
         OcrRunMode.Selected => true,
         OcrRunMode.ResumeIncomplete => page.IsIncluded && page.OcrStatus is OcrStatus.NotProcessed or OcrStatus.Failed or OcrStatus.Processing,
-        OcrRunMode.ReprocessAll => page.IsIncluded,
+        OcrRunMode.ReprocessAll => true,
         _ => throw new ArgumentOutOfRangeException(nameof(mode), mode, null)
     };
 }
@@ -42,7 +45,7 @@ public static class OcrRunPlanner
             targets,
             SkippedCount(OcrStatus.Completed),
             SkippedCount(OcrStatus.ReviewRequired),
-            mode == OcrRunMode.Selected ? 0 : source.Count(page => !page.IsIncluded),
+            mode == OcrRunMode.ResumeIncomplete ? source.Count(page => !page.IsIncluded) : 0,
             targets.Count(page => page.OcrStatus == OcrStatus.Failed),
             targets.Count(page => page.OcrStatus == OcrStatus.Processing),
             targets.Count(page => page.OcrStatus == OcrStatus.NotProcessed));

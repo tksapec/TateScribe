@@ -41,7 +41,7 @@ public sealed class OcrRunPlannerTests
     }
 
     [Fact]
-    public void Reprocess_all_targets_every_included_page_in_sort_order()
+    public void Reprocess_all_preserves_the_original_all_page_behavior_in_sort_order()
     {
         var pages = new[]
         {
@@ -53,11 +53,12 @@ public sealed class OcrRunPlannerTests
 
         var plan = OcrRunPlanner.Plan(OcrRunMode.ReprocessAll, pages);
 
-        Assert.Equal(new[] { "failed.png", "completed.png", "review.png" }, plan.Targets.Select(page => page.FileName));
-        Assert.Equal(1, plan.ExcludedSkippedCount);
+        Assert.Equal(new[] { "excluded.png", "failed.png", "completed.png", "review.png" }, plan.Targets.Select(page => page.FileName));
+        Assert.Equal(0, plan.ExcludedSkippedCount);
         Assert.Equal(0, plan.CompletedSkippedCount);
         Assert.Equal(0, plan.ReviewRequiredSkippedCount);
         Assert.Equal(1, plan.FailedTargetCount);
+        Assert.Equal(0, plan.SkippedCount);
     }
 
     [Fact]
@@ -70,6 +71,7 @@ public sealed class OcrRunPlannerTests
         Assert.Empty(plan.Targets);
         Assert.Equal(1, plan.CompletedSkippedCount);
         Assert.Equal(1, plan.ReviewRequiredSkippedCount);
+        Assert.Equal(2, plan.SkippedCount);
     }
 
     private static ProjectPage Page(string fileName, int sortOrder, bool isIncluded, OcrStatus status) =>
