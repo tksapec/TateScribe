@@ -9,7 +9,11 @@ using TateScribe.Infrastructure.Storage;
 
 namespace TateScribe.App.Services;
 
-public sealed record OcrPageOutcome(Guid PageId, string FileName, bool Succeeded, string? SuggestedText, OcrFailure? Failure);
+public enum OcrPageOutcomeKind { Completed, ReviewRequired, Failed }
+public sealed record OcrPageOutcome(Guid PageId, string FileName, OcrPageOutcomeKind Kind, string? SuggestedText, OcrFailure? Failure)
+{
+    public bool Succeeded => Kind is OcrPageOutcomeKind.Completed or OcrPageOutcomeKind.ReviewRequired;
+}
 
 public sealed record OcrBatchResult(IReadOnlyList<OcrPageOutcome> Pages)
 {
@@ -50,8 +54,24 @@ public sealed class OcrOrchestrationService
                 var paddle = await worker.RecognizeAsync(
                     new OcrRequest(Guid.NewGuid().ToString("N"), "paddle", prepared.CachePath), cancellationToken);
                 stage = OcrFailureStage.Tesseract;
-                var tesseract = await worker.RecognizeAsync(
-                    new OcrRequest(Guid.NewGuid().ToString("N"), "tesseract", prepared.CachePath), cancellationToken);
+                OcrPageResult tesseract;
+                try
+                {
+                    tesseract = await worker.RecognizeAsync(
+                        new OcrRequest(Guid.NewGuid().ToString("N"), "tesseract", prepared.CachePath), cancellationToken);
+                }
+                catch (OperationCanceledException) { throw; }
+                catch (Exception exception)
+                {
+                    var failure = CreateFailure(page, OcrFailureStage.Tesseract, exception,
+                        exception is IOException || (exception as OcrWorkerException)?.CanRetry == true,
+                        wasCancelled: false, (exception as OcrWorkerException)?.ExceptionType);
+                    var fallbackText = VerticalTextReconstruction.Reconstruct(paddle.Words, 20, .75).Text;
+                    await repository.SavePaddleFallbackAsync(page.Id, paddle, fallbackText, failure, cancellationToken);
+                    outcomes.Add(new OcrPageOutcome(page.Id, page.FileName,
+                        OcrPageOutcomeKind.ReviewRequired, fallbackText, failure));
+                    continue;
+                }
                 stage = OcrFailureStage.Merge;
                 var paddleText = VerticalTextReconstruction.Reconstruct(paddle.Words, 20, .75).Text;
                 var rawTesseractText = string.Concat(tesseract.Words.Select(word => word.Text));
@@ -60,14 +80,14 @@ public sealed class OcrOrchestrationService
                     paddleText, rawTesseractText, ordered, 16);
                 stage = OcrFailureStage.DatabaseSave;
                 await repository.SaveOcrAnalysisAsync(page.Id, paddle, rawTesseractText, proposal, cancellationToken);
-                outcomes.Add(new OcrPageOutcome(page.Id, page.FileName, true, proposal.SuggestedText, null));
+                outcomes.Add(new OcrPageOutcome(page.Id, page.FileName, OcrPageOutcomeKind.Completed, proposal.SuggestedText, null));
             }
             catch (OperationCanceledException exception)
             {
                 var failure = CreateFailure(page, stage, exception, retryable: true, wasCancelled: true);
                 await repository.RecordOcrFailureAsync(
                     failure, CancellationToken.None, page.OcrStatus);
-                outcomes.Add(new OcrPageOutcome(page.Id, page.FileName, false, null, failure));
+                outcomes.Add(new OcrPageOutcome(page.Id, page.FileName, OcrPageOutcomeKind.Failed, null, failure));
                 throw;
             }
             catch (Exception exception)
@@ -85,7 +105,7 @@ public sealed class OcrOrchestrationService
                     wasCancelled: false,
                     workerException?.ExceptionType);
                 await repository.RecordOcrFailureAsync(failure, CancellationToken.None);
-                outcomes.Add(new OcrPageOutcome(page.Id, page.FileName, false, null, failure));
+                outcomes.Add(new OcrPageOutcome(page.Id, page.FileName, OcrPageOutcomeKind.Failed, null, failure));
             }
         }
         return new OcrBatchResult(outcomes);

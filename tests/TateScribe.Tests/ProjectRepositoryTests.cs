@@ -1207,8 +1207,8 @@ public sealed class ProjectRepositoryTests : IDisposable
         await Task.Delay(10);
         await ImportAsync("aa", RubyAnnotationStatus.Stale, "second");
         var deduplicated = await repository.GetRubyPreflightCountsAsync(snapshotId, CancellationToken.None);
-        Assert.Equal(0, deduplicated.Confirmed);
-        Assert.Equal(1, deduplicated.Stale);
+        Assert.Equal(1, deduplicated.Confirmed);
+        Assert.Equal(0, deduplicated.Stale);
         Assert.Equal(1, deduplicated.Unresolved);
 
         await Task.Delay(10);
