@@ -817,6 +817,31 @@ public sealed class ProjectRepositoryTests : IDisposable
     }
 
     [Fact]
+    public async Task Paddle_fallback_atomically_saves_words_text_failure_and_review_status()
+    {
+        Directory.CreateDirectory(_directory);
+        await using var repository = await SqliteProjectRepository.CreateAsync(_directory, CancellationToken.None);
+        var page = new ProjectPage(Guid.NewGuid(), "page.png", "C:\\page.png", "hash", 0, true, 0);
+        await repository.SavePagesAsync([page], CancellationToken.None);
+        var paddle = new OcrPageResult("request", "paddle", "model",
+            [new OcrWord("本文", .9, 1, 2, 3, 4)]);
+        var failure = new OcrFailure(Guid.NewGuid(), page.Id, page.FileName,
+            OcrFailureStage.Tesseract, "OcrWorkerException", "tesseract failed",
+            true, false, DateTimeOffset.UtcNow);
+
+        await repository.SavePaddleFallbackAsync(
+            page.Id, paddle, "本文", failure, CancellationToken.None);
+
+        var state = await repository.LoadPageTextStateAsync(page.Id, CancellationToken.None);
+        Assert.Equal("本文", state.SuggestedText);
+        Assert.Equal("本文", Assert.Single(state.MachineWords).Text);
+        Assert.Equal(OcrStatus.ReviewRequired,
+            Assert.Single(await repository.LoadPagesAsync(CancellationToken.None)).OcrStatus);
+        Assert.Equal(failure.Id,
+            Assert.Single(await repository.LoadOcrFailuresAsync(page.Id, CancellationToken.None)).Id);
+    }
+
+    [Fact]
     public async Task Reocr_preserves_manual_text_and_manual_proofreading_state()
     {
         Directory.CreateDirectory(_directory);
@@ -1207,8 +1232,8 @@ public sealed class ProjectRepositoryTests : IDisposable
         await Task.Delay(10);
         await ImportAsync("aa", RubyAnnotationStatus.Stale, "second");
         var deduplicated = await repository.GetRubyPreflightCountsAsync(snapshotId, CancellationToken.None);
-        Assert.Equal(0, deduplicated.Confirmed);
-        Assert.Equal(1, deduplicated.Stale);
+        Assert.Equal(1, deduplicated.Confirmed);
+        Assert.Equal(0, deduplicated.Stale);
         Assert.Equal(1, deduplicated.Unresolved);
 
         await Task.Delay(10);

@@ -200,10 +200,22 @@ public partial class RubyReviewWindow : Window
             UpdateSummary();
             return;
         }
+        if (result.SelectedCount == 0)
+        {
+            MessageBox.Show(this, "対象のルビ候補を1件以上選択してください。", "TateScribe",
+                MessageBoxButton.OK, MessageBoxImage.Information);
+            UpdateSummary();
+            return;
+        }
         for (var index = 0; index < selectedViews.Length; index++)
             selectedViews[index].ApplyProposal(result.Items[index]);
         AnnotationGrid.Items.Refresh();
         UpdateSummary();
+        var changedLabel = status == RubyAnnotationStatus.Confirmed ? "新規確定" : "新規却下";
+        var existingLabel = status == RubyAnnotationStatus.Confirmed ? "確定済み" : "却下済み";
+        MessageBox.Show(this,
+            $"選択: {result.SelectedCount}件{Environment.NewLine}{changedLabel}: {result.ChangedCount}件{Environment.NewLine}{existingLabel}: {result.AlreadyInTargetStatusCount}件",
+            "TateScribe", MessageBoxButton.OK, MessageBoxImage.Information);
     }
 
     private void AnnotationGridPreviewKeyDown(object sender, KeyEventArgs e)
