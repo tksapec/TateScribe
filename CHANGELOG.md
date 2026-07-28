@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- Reloaded persisted page states after every OCR exit, preserved Paddle-only results when Tesseract fails, and made incomplete resume skip Completed/ReviewRequired pages.
+- Prioritized effective ruby by status, limited stale invalidation to structural or referenced image evidence changes, and reported ruby multi-selection outcomes.
+- Validated DOCX temporary output before safe replacement and updated OCR/Word-ruby documentation.
+
 - Added a configurable Word ruby offset with a 3pt default and 0 through 20 validation, provisional DOCX raise metrics, normalized XML diagnostics, and an explicit manual Word visual-verification boundary. Ruby review now documents Ctrl/Shift selection, Ctrl+Enter confirmation, button-only rejection, selected-count summary, and separate bulk-result categories. This adds no SQLite schema migration and no Release ZIP.
 
 - Added separate ChatGPT text-proofreading and ruby-annotation prompts from one provider.

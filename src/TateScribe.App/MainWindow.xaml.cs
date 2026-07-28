@@ -559,8 +559,11 @@ public partial class MainWindow : Window
                 }
                 : preparation.Preflight;
             if (!ConfirmExport(preflight, "DOCX")) return;
-            await new OpenXmlDocumentExporter().ExportAsync(preparation.Document, outputPath,
-                PageBreakBeforeChapters.IsChecked == true, "游明朝", rubyOptions, CancellationToken.None);
+            await ValidatedDocxWriter.WriteAsync(outputPath,
+                (temporaryPath, cancellationToken) => new OpenXmlDocumentExporter().ExportAsync(
+                    preparation.Document, temporaryPath,
+                    PageBreakBeforeChapters.IsChecked == true, "游明朝", rubyOptions, cancellationToken),
+                CancellationToken.None);
             await new DocumentExportService().PersistAfterSuccessfulOutputAsync(
                 _projectDirectory, preparation.Document, CancellationToken.None);
             var summary = preparation.LegacyPreparation.EmptyPageCount == 0
@@ -678,6 +681,7 @@ public partial class MainWindow : Window
     private async void ResumeIncompleteOcr(object sender, RoutedEventArgs e)
     {
         if (_projectDirectory is null || _pages.Count == 0) return;
+        await ReloadPagesAfterOcrAsync(_projectDirectory, (PageList.SelectedItem as ProjectPage)?.Id);
         await RunOcrAsync(OcrRunMode.ResumeIncomplete, _pages);
     }
 
@@ -706,6 +710,8 @@ public partial class MainWindow : Window
             MessageBox.Show(this, "ローカルOCRランタイムが見つかりません。scripts/setup-ocr.ps1 を実行してください。", "TateScribe", MessageBoxButton.OK, MessageBoxImage.Warning);
             return;
         }
+        var selectedPageId = (PageList.SelectedItem as ProjectPage)?.Id;
+        Exception? ocrException = null;
         try
         {
             _ocrCancellation = new CancellationTokenSource();
@@ -727,27 +733,41 @@ public partial class MainWindow : Window
                 }
             }
             var completionStatus = $"OCR完了: 成功: {result.SucceededCount}、失敗: {result.Failures.Count}、スキップ: {plan.SkippedCount}";
+            var paddleFallbackCount = result.Pages.Count(page => page.Kind == OcrPageOutcomeKind.ReviewRequired);
+            if (paddleFallbackCount > 0)
+                completionStatus += $"（{paddleFallbackCount}件: Tesseract失敗のため、PaddleOCR結果を要確認として保存しました。）";
             if (result.Failures.Count > 0)
                 completionStatus += $"（失敗詳細: {string.Join(", ", result.Failures.Select(failure => $"{failure.FileName}: {failure.Stage} {failure.Message}"))}）";
             ReviewStatus.Text = completionStatus;
-            await using var repository = await SqliteProjectRepository.CreateAsync(projectDirectory, CancellationToken.None);
-            _pages = (await repository.LoadPagesAsync(CancellationToken.None)).ToList();
-            RefreshPages();
         }
         catch (OcrWorkerException exception)
         {
+            ocrException = exception;
             MessageBox.Show(this, exception.Message, "OCRを実行できません", MessageBoxButton.OK, MessageBoxImage.Error);
         }
-        catch (OperationCanceledException)
+        catch (OperationCanceledException exception)
         {
+            ocrException = exception;
             ReviewStatus.Text = "OCRを中止しました。完了済みのOCR結果は保持されています。";
         }
         catch (Exception exception)
         {
+            ocrException = exception;
             MessageBox.Show(this, exception.Message, "OCRを実行できません", MessageBoxButton.OK, MessageBoxImage.Error);
         }
         finally
         {
+            try
+            {
+                await ReloadPagesAfterOcrAsync(projectDirectory, selectedPageId);
+            }
+            catch (Exception reloadException)
+            {
+                var message = ocrException is null
+                    ? reloadException.Message
+                    : $"元のOCRエラー: {ocrException.Message}{Environment.NewLine}ページ状態の再読込みにも失敗しました: {reloadException.Message}";
+                MessageBox.Show(this, message, "OCR後のページ状態を更新できません", MessageBoxButton.OK, MessageBoxImage.Error);
+            }
             _ocrCancellation?.Dispose();
             _ocrCancellation = null;
             RunOcrButton.IsEnabled = true;
@@ -755,6 +775,16 @@ public partial class MainWindow : Window
             RunAllOcrButton.IsEnabled = true;
             CancelOcrButton.IsEnabled = false;
         }
+    }
+
+    private async Task ReloadPagesAfterOcrAsync(string projectDirectory, Guid? selectedPageId)
+    {
+        await using var repository = await SqliteProjectRepository.CreateAsync(projectDirectory, CancellationToken.None);
+        _pages = (await repository.LoadPagesAsync(CancellationToken.None)).ToList();
+        RefreshPages();
+        var selected = selectedPageId is { } id ? _pages.SingleOrDefault(page => page.Id == id) : null;
+        PageList.SelectedItem = selected;
+        if (selected is not null) PageList.ScrollIntoView(selected);
     }
 
     private bool ConfirmOcrRun(OcrRunPlan plan, OcrRunMode mode)
