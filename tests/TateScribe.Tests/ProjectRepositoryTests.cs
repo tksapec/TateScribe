@@ -817,6 +817,31 @@ public sealed class ProjectRepositoryTests : IDisposable
     }
 
     [Fact]
+    public async Task Paddle_fallback_atomically_saves_words_text_failure_and_review_status()
+    {
+        Directory.CreateDirectory(_directory);
+        await using var repository = await SqliteProjectRepository.CreateAsync(_directory, CancellationToken.None);
+        var page = new ProjectPage(Guid.NewGuid(), "page.png", "C:\\page.png", "hash", 0, true, 0);
+        await repository.SavePagesAsync([page], CancellationToken.None);
+        var paddle = new OcrPageResult("request", "paddle", "model",
+            [new OcrWord("本文", .9, 1, 2, 3, 4)]);
+        var failure = new OcrFailure(Guid.NewGuid(), page.Id, page.FileName,
+            OcrFailureStage.Tesseract, "OcrWorkerException", "tesseract failed",
+            true, false, DateTimeOffset.UtcNow);
+
+        await repository.SavePaddleFallbackAsync(
+            page.Id, paddle, "本文", failure, CancellationToken.None);
+
+        var state = await repository.LoadPageTextStateAsync(page.Id, CancellationToken.None);
+        Assert.Equal("本文", state.SuggestedText);
+        Assert.Equal("本文", Assert.Single(state.MachineWords).Text);
+        Assert.Equal(OcrStatus.ReviewRequired,
+            Assert.Single(await repository.LoadPagesAsync(CancellationToken.None)).OcrStatus);
+        Assert.Equal(failure.Id,
+            Assert.Single(await repository.LoadOcrFailuresAsync(page.Id, CancellationToken.None)).Id);
+    }
+
+    [Fact]
     public async Task Reocr_preserves_manual_text_and_manual_proofreading_state()
     {
         Directory.CreateDirectory(_directory);
@@ -1174,7 +1199,7 @@ public sealed class ProjectRepositoryTests : IDisposable
     }
 
     [Fact]
-    public async Task Ruby_preflight_deduplicates_locations_and_excludes_conflicting_readings_from_document()
+    public async Task Ruby_preflight_prefers_latest_confirmed_and_stales_previous_overlapping_reading()
     {
         Directory.CreateDirectory(_directory);
         await using var repository = await SqliteProjectRepository.CreateAsync(_directory, CancellationToken.None);
@@ -1189,35 +1214,113 @@ public sealed class ProjectRepositoryTests : IDisposable
         var snapshotId = await repository.SaveDocumentSnapshotAsync(document, "Confirmed", CancellationToken.None);
         var packagePages = new[] { new RubyPackagePage(page.Id, "0001", page.SourcePath, null) };
 
-        async Task ImportAsync(string reading, RubyAnnotationStatus status, string unresolvedReason)
+        async Task<Guid> ImportAsync(string reading, RubyAnnotationStatus status, string unresolvedReason)
         {
             var batchId = Guid.NewGuid();
+            var annotationId = Guid.NewGuid();
             await repository.RecordRubyBatchAsync(batchId, projectId, snapshotId, RubyPolicy.PreserveOriginalOnly,
                 packagePages, [], CancellationToken.None);
             await repository.SaveRubyImportAsync(snapshotId, RubyPolicy.PreserveOriginalOnly,
                 new RubyImportDocument(1, projectId, batchId, document.DocumentTextHash,
                     [new RubyAnnotationProposal(paragraph.ParagraphId.ToString("D"), 0, 2, "AA", reading,
-                        RubySource.UserConfirmed, 1, [], "test", Guid.NewGuid(), status)],
+                        RubySource.UserConfirmed, 1, [], "test", annotationId, status)],
                     [new RubyUnresolvedItem(paragraph.ParagraphId.ToString("D"), 0, 2, "AA", [], unresolvedReason),
                      new RubyUnresolvedItem(paragraph.ParagraphId.ToString("D"), 2, 2, "BB", [], unresolvedReason)]),
                 CancellationToken.None);
+            return annotationId;
         }
 
-        await ImportAsync("aa", RubyAnnotationStatus.Confirmed, "first");
+        var oldConfirmedId = await ImportAsync("aa", RubyAnnotationStatus.Confirmed, "first");
         await Task.Delay(10);
         await ImportAsync("aa", RubyAnnotationStatus.Stale, "second");
         var deduplicated = await repository.GetRubyPreflightCountsAsync(snapshotId, CancellationToken.None);
-        Assert.Equal(0, deduplicated.Confirmed);
-        Assert.Equal(1, deduplicated.Stale);
+        Assert.Equal(1, deduplicated.Confirmed);
+        Assert.Equal(0, deduplicated.Stale);
         Assert.Equal(1, deduplicated.Unresolved);
 
         await Task.Delay(10);
         await ImportAsync("different", RubyAnnotationStatus.Confirmed, "third");
-        var conflicting = await repository.GetRubyPreflightCountsAsync(snapshotId, CancellationToken.None);
-        Assert.Equal(0, conflicting.Confirmed);
-        Assert.Single(conflicting.Conflicts);
-        Assert.DoesNotContain((await repository.LoadStructuredDocumentAsync(projectId, snapshotId, CancellationToken.None))
-            .Paragraphs.Single().Inlines, inline => inline is RubyInline);
+        var effective = await repository.GetRubyPreflightCountsAsync(snapshotId, CancellationToken.None);
+        Assert.Equal(1, effective.Confirmed);
+        Assert.Equal(0, effective.Proposed);
+        Assert.Equal(0, effective.Stale);
+        Assert.Empty(effective.Conflicts);
+        var ruby = Assert.IsType<RubyInline>(Assert.Single(
+            (await repository.LoadStructuredDocumentAsync(projectId, snapshotId, CancellationToken.None))
+            .Paragraphs.Single().Inlines));
+        Assert.Equal("different", ruby.Reading);
+
+        await using var check = new SqliteConnection($"Data Source={Path.Combine(_directory, "project.db")}");
+        await check.OpenAsync();
+        var status = check.CreateCommand();
+        status.CommandText = "SELECT status FROM ruby_annotations WHERE id = $id;";
+        status.Parameters.AddWithValue("$id", oldConfirmedId.ToString("D"));
+        Assert.Equal("Stale", await status.ExecuteScalarAsync());
+    }
+
+    [Fact]
+    public async Task Ruby_preflight_rejects_legacy_state_with_two_conflicting_confirmed_readings()
+    {
+        Directory.CreateDirectory(_directory);
+        var page = new ProjectPage(Guid.NewGuid(), "page.png", Path.Combine(_directory, "page.png"), "hash", 0, true, 0);
+        await File.WriteAllBytesAsync(page.SourcePath, [1]);
+        Guid projectId;
+        Guid snapshotId;
+        Guid paragraphId;
+        var firstAnnotationId = Guid.NewGuid();
+        var secondAnnotationId = Guid.NewGuid();
+        await using (var repository = await SqliteProjectRepository.CreateAsync(_directory, CancellationToken.None))
+        {
+            await repository.SavePagesAsync([page], CancellationToken.None);
+            projectId = await repository.GetProjectIdAsync(CancellationToken.None);
+            paragraphId = Guid.NewGuid();
+            var paragraph = new StructuredParagraph(paragraphId, DocumentElementRole.BodyParagraph,
+                [new TextInline("AABB")], DocumentTextHash.Compute("AABB"),
+                [new SourceSpan(page.Id, "0001", 0, 4)]);
+            var draft = new StructuredDocument(projectId, [paragraph], string.Empty);
+            var document = draft with { DocumentTextHash = DocumentTextHash.Compute(draft) };
+            snapshotId = await repository.SaveDocumentSnapshotAsync(document, "Confirmed", CancellationToken.None);
+            var packagePages = new[] { new RubyPackagePage(page.Id, "0001", page.SourcePath, null) };
+
+            async Task SaveAsync(Guid annotationId, string reading)
+            {
+                var batchId = Guid.NewGuid();
+                await repository.RecordRubyBatchAsync(batchId, projectId, snapshotId,
+                    RubyPolicy.PreserveOriginalOnly, packagePages, [], CancellationToken.None);
+                await repository.SaveRubyImportAsync(snapshotId, RubyPolicy.PreserveOriginalOnly,
+                    new RubyImportDocument(1, projectId, batchId, document.DocumentTextHash,
+                        [new RubyAnnotationProposal(paragraphId.ToString("D"), 0, 2, "AA", reading,
+                            RubySource.UserConfirmed, 1, [], "legacy", annotationId,
+                            RubyAnnotationStatus.Confirmed)], []), CancellationToken.None);
+            }
+
+            await SaveAsync(firstAnnotationId, "aa");
+            await SaveAsync(secondAnnotationId, "different");
+        }
+
+        await using (var connection = new SqliteConnection($"Data Source={Path.Combine(_directory, "project.db")}"))
+        {
+            await connection.OpenAsync();
+            var corruptLegacyState = connection.CreateCommand();
+            corruptLegacyState.CommandText = """
+                UPDATE ruby_annotations SET status = 'Confirmed'
+                WHERE id IN ($first, $second);
+                """;
+            corruptLegacyState.Parameters.AddWithValue("$first", firstAnnotationId.ToString("D"));
+            corruptLegacyState.Parameters.AddWithValue("$second", secondAnnotationId.ToString("D"));
+            Assert.Equal(2, await corruptLegacyState.ExecuteNonQueryAsync());
+        }
+
+        await using (var repository = await SqliteProjectRepository.CreateAsync(_directory, CancellationToken.None))
+        {
+            var counts = await repository.GetRubyPreflightCountsAsync(snapshotId, CancellationToken.None);
+            Assert.Equal(0, counts.Confirmed);
+            Assert.Single(counts.Conflicts);
+            Assert.DoesNotContain(
+                (await repository.LoadStructuredDocumentAsync(projectId, snapshotId, CancellationToken.None))
+                .Paragraphs.Single().Inlines,
+                inline => inline is RubyInline);
+        }
     }
 
     public void Dispose()

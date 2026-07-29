@@ -13,7 +13,10 @@ public sealed record RubyReviewSelectionError(
 
 public sealed record RubyReviewSelectionResult(
     IReadOnlyList<RubyAnnotationProposal> Items,
-    IReadOnlyList<RubyReviewSelectionError> Errors)
+    IReadOnlyList<RubyReviewSelectionError> Errors,
+    int SelectedCount = 0,
+    int ChangedCount = 0,
+    int AlreadyInTargetStatusCount = 0)
 {
     public bool IsSuccess => Errors.Count == 0;
 }
@@ -113,11 +116,13 @@ public static class RubyReviewSelectionService
 
         var immutableItems = selected.ToArray();
         if (errors.Count > 0)
-            return new RubyReviewSelectionResult(immutableItems, errors.ToArray());
+            return new RubyReviewSelectionResult(immutableItems, errors.ToArray(), immutableItems.Length);
 
         return new RubyReviewSelectionResult(
             immutableItems.Select(item => item with { Status = status }).ToArray(),
-            []);
+            [], immutableItems.Length,
+            immutableItems.Count(item => item.Status != status),
+            immutableItems.Count(item => item.Status == status));
     }
 
     private static bool SplitsSurrogatePair(string text, int boundary) =>

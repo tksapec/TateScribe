@@ -13,11 +13,17 @@ namespace TateScribe.Infrastructure.Storage;
 
 public sealed class SqliteProjectRepository : IAsyncDisposable
 {
-    private enum PageStructureChange
+    private sealed record RubySelectionCandidate(string ParagraphId, int Start, int Length,
+        string Reading, RubyAnnotationStatus Status, DateTimeOffset Updated,
+        DateTimeOffset Exported, string Id);
+    private sealed record EffectiveRubySelection(
+        IReadOnlyList<RubySelectionCandidate> Items, IReadOnlyList<string> Conflicts);
+    [Flags]
+    private enum PageChangeImpact
     {
-        Unchanged,
-        Added,
-        Changed,
+        None = 0,
+        DocumentStructure = 1,
+        ImageEvidence = 2,
     }
 
     private readonly SqliteConnection _connection;
@@ -50,15 +56,12 @@ public sealed class SqliteProjectRepository : IAsyncDisposable
     public async Task SavePagesAsync(IReadOnlyList<ProjectPage> pages, CancellationToken cancellationToken)
     {
         await using var transaction = _connection.BeginTransaction();
-        var documentStructureChanged = false;
+        var impacts = new List<(Guid PageId, PageChangeImpact Impact)>();
         foreach (var page in pages)
         {
-            var structureChange = await GetStructuralPageChangeAsync(
+            var impact = await GetPageChangeImpactAsync(
                 transaction, page, cancellationToken);
-            documentStructureChanged |= structureChange == PageStructureChange.Changed
-                || (structureChange == PageStructureChange.Added
-                    && page.IsIncluded
-                    && page.PageRole is not (PageRole.Illustration or PageRole.Blank));
+            impacts.Add((page.Id, impact));
             var command = _connection.CreateCommand();
             command.Transaction = transaction;
             command.CommandText = """
@@ -91,12 +94,17 @@ public sealed class SqliteProjectRepository : IAsyncDisposable
             command.Parameters.AddWithValue("$joinType", page.BoundaryJoinType.ToString());
             await command.ExecuteNonQueryAsync(cancellationToken);
         }
-        if (documentStructureChanged)
-            await MarkAllRubyStructureStaleAsync(transaction, cancellationToken);
+        foreach (var (pageId, impact) in impacts)
+        {
+            if (impact.HasFlag(PageChangeImpact.DocumentStructure))
+                await MarkRubyStructureStaleAsync(transaction, pageId, cancellationToken);
+            else if (impact.HasFlag(PageChangeImpact.ImageEvidence))
+                await MarkImageEvidenceRubyStaleAsync(transaction, pageId, cancellationToken);
+        }
         await transaction.CommitAsync(cancellationToken);
     }
 
-    private async Task<PageStructureChange> GetStructuralPageChangeAsync(
+    private async Task<PageChangeImpact> GetPageChangeImpactAsync(
         SqliteTransaction transaction,
         ProjectPage page,
         CancellationToken cancellationToken)
@@ -110,20 +118,47 @@ public sealed class SqliteProjectRepository : IAsyncDisposable
             """;
         command.Parameters.AddWithValue("$id", page.Id.ToString("D"));
         await using var reader = await command.ExecuteReaderAsync(cancellationToken);
-        if (!await reader.ReadAsync(cancellationToken)) return PageStructureChange.Added;
+        if (!await reader.ReadAsync(cancellationToken))
+            return page.IsIncluded && page.PageRole is not (PageRole.Illustration or PageRole.Blank)
+                ? PageChangeImpact.DocumentStructure : PageChangeImpact.None;
         var crop = page.Crop ?? NormalizedCrop.Full;
-        var changed = !string.Equals(reader.GetString(0), page.SourcePath, StringComparison.Ordinal)
+        var imageChanged = !string.Equals(reader.GetString(0), page.SourcePath, StringComparison.Ordinal)
             || !string.Equals(reader.GetString(1), page.SourceHash, StringComparison.Ordinal)
-            || reader.GetInt32(2) != page.SortOrder
-            || (reader.GetInt32(3) != 0) != page.IsIncluded
             || reader.GetInt32(4) != page.RotationDegrees
             || reader.GetDouble(5) != crop.Left
             || reader.GetDouble(6) != crop.Top
             || reader.GetDouble(7) != crop.Right
-            || reader.GetDouble(8) != crop.Bottom
-            || !string.Equals(reader.GetString(9), page.DisplayProfile.ToString(), StringComparison.Ordinal)
+            || reader.GetDouble(8) != crop.Bottom;
+        var structureChanged = reader.GetInt32(2) != page.SortOrder
+            || (reader.GetInt32(3) != 0) != page.IsIncluded
             || !string.Equals(reader.GetString(10), page.PageRole.ToString(), StringComparison.Ordinal);
-        return changed ? PageStructureChange.Changed : PageStructureChange.Unchanged;
+        return (structureChanged ? PageChangeImpact.DocumentStructure : PageChangeImpact.None)
+            | (imageChanged ? PageChangeImpact.ImageEvidence : PageChangeImpact.None);
+    }
+
+    private async Task MarkImageEvidenceRubyStaleAsync(
+        SqliteTransaction transaction, Guid pageId, CancellationToken cancellationToken)
+    {
+        var command = _connection.CreateCommand();
+        command.Transaction = transaction;
+        command.CommandText = """
+            INSERT INTO ruby_annotation_history
+                (annotation_id, paragraph_id, start_offset, length, base_text, reading, source,
+                 confidence, evidence, status, batch_id, recorded_utc)
+            SELECT a.id,a.paragraph_id,a.start_offset,a.length,a.base_text,a.reading,a.source,
+                   a.confidence,a.evidence,a.status,a.batch_id,$utc
+            FROM ruby_annotations a
+            WHERE a.status IN ('Proposed','Confirmed') AND a.source='ImageConfirmed'
+              AND EXISTS (SELECT 1 FROM ruby_annotation_evidence_pages e
+                          WHERE e.annotation_id=a.id AND e.page_id=$pageId);
+            UPDATE ruby_annotations SET status='Stale', updated_utc=$utc
+            WHERE status IN ('Proposed','Confirmed') AND source='ImageConfirmed'
+              AND EXISTS (SELECT 1 FROM ruby_annotation_evidence_pages e
+                          WHERE e.annotation_id=ruby_annotations.id AND e.page_id=$pageId);
+            """;
+        command.Parameters.AddWithValue("$pageId", pageId.ToString("D"));
+        command.Parameters.AddWithValue("$utc", DateTimeOffset.UtcNow.ToString("O"));
+        await command.ExecuteNonQueryAsync(cancellationToken);
     }
 
     private async Task MarkAllRubyStructureStaleAsync(
@@ -840,7 +875,7 @@ public sealed class SqliteProjectRepository : IAsyncDisposable
                         Enum.Parse<RubyAnnotationStatus>(annotationReader.GetString(9))),
                     DateTimeOffset.Parse(annotationReader.GetString(8), CultureInfo.InvariantCulture),
                     DateTimeOffset.Parse(annotationReader.GetString(10), CultureInfo.InvariantCulture)));
-            var latest = SelectEffectiveRuby(annotations.Select(item => (
+            var latest = SelectEffectiveRuby(annotations.Select(item => new RubySelectionCandidate(
                     row.Id.ToString("D"), item.Proposal.Start, item.Proposal.Length, item.Proposal.Reading,
                     item.Proposal.Status, item.Updated, item.Exported, item.Proposal.AnnotationId.ToString("D"))))
                 .Items.Where(item => item.Status == RubyAnnotationStatus.Confirmed)
@@ -1019,10 +1054,10 @@ public sealed class SqliteProjectRepository : IAsyncDisposable
             WHERE b.document_snapshot_id = $snapshotId;
             """;
         annotations.Parameters.AddWithValue("$snapshotId", snapshotId.ToString("D"));
-        var rows = new List<(string ParagraphId, int Start, int Length, string Reading, RubyAnnotationStatus Status, DateTimeOffset Updated, DateTimeOffset Exported, string Id)>();
+        var rows = new List<RubySelectionCandidate>();
         await using (var reader = await annotations.ExecuteReaderAsync(cancellationToken))
             while (await reader.ReadAsync(cancellationToken))
-                rows.Add((reader.GetString(0), reader.GetInt32(1), reader.GetInt32(2), reader.GetString(3),
+                rows.Add(new RubySelectionCandidate(reader.GetString(0), reader.GetInt32(1), reader.GetInt32(2), reader.GetString(3),
                     Enum.Parse<RubyAnnotationStatus>(reader.GetString(4)),
                     DateTimeOffset.Parse(reader.GetString(5), CultureInfo.InvariantCulture),
                     DateTimeOffset.Parse(reader.GetString(6), CultureInfo.InvariantCulture), reader.GetString(7)));
@@ -1049,23 +1084,29 @@ public sealed class SqliteProjectRepository : IAsyncDisposable
         return new RubyPreflightCounts(confirmed, proposed, stale, unresolvedKeys.Count, effective.Conflicts);
     }
 
-    private static (IReadOnlyList<(string ParagraphId, int Start, int Length, string Reading, RubyAnnotationStatus Status)> Items, IReadOnlyList<string> Conflicts)
-        SelectEffectiveRuby(IEnumerable<(string ParagraphId, int Start, int Length, string Reading, RubyAnnotationStatus Status, DateTimeOffset Updated, DateTimeOffset Exported, string Id)> rows)
+    private static EffectiveRubySelection SelectEffectiveRuby(IEnumerable<RubySelectionCandidate> rows)
     {
-        var items = new List<(string, int, int, string, RubyAnnotationStatus)>();
+        var items = new List<RubySelectionCandidate>();
         var conflicts = new List<string>();
         foreach (var group in rows.GroupBy(item => (item.ParagraphId, item.Start, item.Length)))
         {
-            if (group.Select(item => item.Reading).Distinct(StringComparer.Ordinal).Skip(1).Any())
+            var relevant = group.Where(item => item.Status == RubyAnnotationStatus.Confirmed).ToArray();
+            if (relevant.Length == 0)
+                relevant = group.Where(item => item.Status == RubyAnnotationStatus.Proposed).ToArray();
+            if (relevant.Length == 0)
+                relevant = group.Where(item => item.Status == RubyAnnotationStatus.Stale).ToArray();
+            if (relevant.Length == 0) continue; // Rejected-only groups have no effective ruby.
+            if (relevant[0].Status != RubyAnnotationStatus.Stale
+                && relevant.Select(item => item.Reading).Distinct(StringComparer.Ordinal).Skip(1).Any())
             {
                 conflicts.Add($"RubyConflict:{group.Key.ParagraphId}:{group.Key.Start}:{group.Key.Length}");
                 continue;
             }
-            var latest = group.OrderByDescending(item => item.Updated)
+            var latest = relevant.OrderByDescending(item => item.Updated)
                 .ThenByDescending(item => item.Exported).ThenByDescending(item => item.Id, StringComparer.Ordinal).First();
-            items.Add((latest.ParagraphId, latest.Start, latest.Length, latest.Reading, latest.Status));
+            items.Add(latest);
         }
-        return (items, conflicts);
+        return new EffectiveRubySelection(items, conflicts);
     }
 
     public async Task<IReadOnlyList<RubyAnnotationProposal>> LoadRubyAnnotationsAsync(
@@ -1671,6 +1712,46 @@ public sealed class SqliteProjectRepository : IAsyncDisposable
         review.CommandText = "UPDATE pages SET review_item_count = (SELECT COUNT(*) FROM review_items WHERE page_id = $pageId) WHERE id = $pageId;";
         review.Parameters.AddWithValue("$pageId", pageId.ToString("D"));
         await review.ExecuteNonQueryAsync(cancellationToken);
+    }
+
+    public async Task SavePaddleFallbackAsync(
+        Guid pageId, OcrPageResult paddle, string suggestedText, OcrFailure failure,
+        CancellationToken cancellationToken)
+    {
+        await using var transaction = _connection.BeginTransaction();
+        await ReplaceOcrWordsAsync(transaction, pageId, paddle.Engine, paddle.ModelVersion,
+            paddle.Words, cancellationToken);
+        var runId = await SaveOcrRunAsync(transaction, pageId, paddle.Engine, paddle.ModelVersion,
+            paddle.Words, DateTimeOffset.UtcNow, null, cancellationToken);
+        var proposal = _connection.CreateCommand();
+        proposal.Transaction = transaction;
+        proposal.CommandText = """
+            INSERT INTO ocr_merge_proposals (page_id, suggested_text, created_utc)
+            VALUES ($pageId, $text, $utc)
+            ON CONFLICT(page_id) DO UPDATE SET suggested_text=excluded.suggested_text, created_utc=excluded.created_utc;
+            """;
+        proposal.Parameters.AddWithValue("$pageId", pageId.ToString("D"));
+        proposal.Parameters.AddWithValue("$text", suggestedText);
+        proposal.Parameters.AddWithValue("$utc", DateTimeOffset.UtcNow.ToString("O"));
+        await proposal.ExecuteNonQueryAsync(cancellationToken);
+        var failureCommand = _connection.CreateCommand();
+        failureCommand.Transaction = transaction;
+        failureCommand.CommandText = """
+            INSERT INTO ocr_failures (id,page_id,file_name,stage,exception_type,message,retryable,was_cancelled,occurred_utc)
+            VALUES ($id,$pageId,$fileName,$stage,$type,$message,$retryable,0,$utc);
+            UPDATE pages SET ocr_status='ReviewRequired', last_ocr_run_id=$runId WHERE id=$pageId;
+            """;
+        failureCommand.Parameters.AddWithValue("$id", failure.Id.ToString("D"));
+        failureCommand.Parameters.AddWithValue("$pageId", pageId.ToString("D"));
+        failureCommand.Parameters.AddWithValue("$fileName", failure.FileName);
+        failureCommand.Parameters.AddWithValue("$stage", failure.Stage.ToString());
+        failureCommand.Parameters.AddWithValue("$type", failure.ExceptionType);
+        failureCommand.Parameters.AddWithValue("$message", failure.Message);
+        failureCommand.Parameters.AddWithValue("$retryable", failure.Retryable ? 1 : 0);
+        failureCommand.Parameters.AddWithValue("$utc", failure.OccurredAt.ToString("O"));
+        failureCommand.Parameters.AddWithValue("$runId", runId.ToString("D"));
+        await failureCommand.ExecuteNonQueryAsync(cancellationToken);
+        await transaction.CommitAsync(cancellationToken);
     }
 
     public async Task<PageTextState> LoadPageTextStateAsync(Guid pageId, CancellationToken cancellationToken)

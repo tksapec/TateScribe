@@ -131,7 +131,11 @@ public sealed class DendenExportService : IDendenExportService
             }
             await WriteAsync("ddconv.yml", BuildYaml(prepared.Options));
             await WriteAsync("default.css", BuildCss(prepared.Options.VerticalWriting));
-            await File.WriteAllTextAsync(Path.Combine(destinationDirectory, "README.txt"), Readme, Utf8NoBom, cancellationToken);
+            await File.WriteAllTextAsync(
+                Path.Combine(destinationDirectory, "README.txt"),
+                NormalizeLineEndings(Readme),
+                Utf8NoBom,
+                cancellationToken);
             if (prepared.Cover is not null)
                 await File.WriteAllBytesAsync(
                     Path.Combine(uploadDirectory, prepared.Cover.FileName), prepared.Cover.Bytes, cancellationToken);
@@ -154,10 +158,13 @@ public sealed class DendenExportService : IDendenExportService
 
         async Task WriteAsync(string fileName, string text)
         {
-            var normalized = text.Replace("\r\n", "\n", StringComparison.Ordinal).Replace('\r', '\n');
+            var normalized = NormalizeLineEndings(text);
             await File.WriteAllTextAsync(Path.Combine(uploadDirectory, fileName), normalized, Utf8NoBom, cancellationToken);
         }
     }
+
+    private static string NormalizeLineEndings(string text) =>
+        text.Replace("\r\n", "\n", StringComparison.Ordinal).Replace('\r', '\n');
 
     private static PreparedExport PrepareExport(
         DendenExportDocument exportDocument,

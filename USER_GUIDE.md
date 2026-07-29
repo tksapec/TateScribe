@@ -1,5 +1,13 @@
 # User guide
 
+## OCR resume and safe output
+
+`未完了ページから再開` processes only included NotProcessed, Failed, and Processing pages; Completed, ReviewRequired, and excluded pages are skipped. `全ページを再OCR` explicitly updates existing OCR results for every registered page. If PaddleOCR succeeds but Tesseract fails, the PaddleOCR text is saved as ReviewRequired.
+
+Ruby confirm/reject with no selection displays `対象のルビ候補を1件以上選択してください。`. After a multi-selection action the selected, newly changed, and already-in-target-status counts are displayed.
+
+DOCX output is generated and Open XML validated in a temporary file in the destination directory before safe replacement. The 3pt Word ruby setting uses a provisional Open XML conversion; final placement must be visually checked in Microsoft Word. See `docs/WORD_RUBY_VALIDATION.md`.
+
 1. Import book screenshots and run OCR.
 2. Export a text proofreading package.
 3. Open `ChatGPTへの指示`, select `本文校正`, and copy the prompt.

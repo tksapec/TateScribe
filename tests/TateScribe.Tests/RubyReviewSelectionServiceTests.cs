@@ -79,6 +79,27 @@ public sealed class RubyReviewSelectionServiceTests
         Assert.True(result.IsSuccess);
         Assert.Empty(result.Items);
         Assert.Empty(result.Errors);
+        Assert.Equal(0, result.SelectedCount);
+        Assert.Equal(0, result.ChangedCount);
+        Assert.Equal(0, result.AlreadyInTargetStatusCount);
+    }
+
+    [Fact]
+    public void Selection_result_reports_changed_and_already_target_counts()
+    {
+        var proposed = Proposal("p1", 0, 1, "甲", "こう");
+        var confirmed = Proposal("p1", 1, 1, "乙", "おつ") with
+        {
+            Status = RubyAnnotationStatus.Confirmed,
+        };
+
+        var result = RubyReviewSelectionService.ApplyStatus(
+            [proposed, confirmed], RubyAnnotationStatus.Confirmed, _ => "甲乙");
+
+        Assert.True(result.IsSuccess);
+        Assert.Equal(2, result.SelectedCount);
+        Assert.Equal(1, result.ChangedCount);
+        Assert.Equal(1, result.AlreadyInTargetStatusCount);
     }
 
     [Theory]

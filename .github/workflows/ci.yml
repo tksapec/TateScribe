@@ -1,0 +1,37 @@
+name: Windows CI
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+jobs:
+  build-test-package:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-dotnet@v4
+        with:
+          # .NET 8 is the target runtime. The current OpenCvSharp analyzer requires
+          # the newer compiler shipped in the .NET 10 SDK.
+          dotnet-version: |
+            8.0.x
+            10.0.x
+      - name: Build
+        shell: pwsh
+        run: .\scripts\build.ps1
+      - name: Test
+        shell: pwsh
+        run: .\scripts\test.ps1
+      - name: Prepare local OCR runtime for packaging
+        shell: pwsh
+        run: .\scripts\setup-ocr.ps1
+      - name: Package without archive
+        shell: pwsh
+        run: .\scripts\package.ps1 -SkipArchive
+      - name: Assert release ZIP was not created
+        shell: pwsh
+        run: |
+          if (Test-Path -LiteralPath .\artifacts\TateScribe-win-x64.zip) {
+            throw 'package.ps1 -SkipArchive unexpectedly created the release ZIP.'
+          }
