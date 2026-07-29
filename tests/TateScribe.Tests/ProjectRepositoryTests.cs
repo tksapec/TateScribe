@@ -1245,12 +1245,15 @@ public sealed class ProjectRepositoryTests : IDisposable
         Assert.Equal(0, effective.Proposed);
         Assert.Equal(0, effective.Stale);
         Assert.Empty(effective.Conflicts);
-        var ruby = Assert.IsType<RubyInline>(Assert.Single(
-            (await repository.LoadStructuredDocumentAsync(projectId, snapshotId, CancellationToken.None))
-            .Paragraphs.Single().Inlines));
+        var composedParagraph = (await repository.LoadStructuredDocumentAsync(
+            projectId, snapshotId, CancellationToken.None)).Paragraphs.Single();
+        var ruby = Assert.Single(composedParagraph.Inlines.OfType<RubyInline>());
+        Assert.Equal("AA", ruby.BaseText);
         Assert.Equal("different", ruby.Reading);
+        var remainingText = Assert.Single(composedParagraph.Inlines.OfType<TextInline>());
+        Assert.Equal("BB", remainingText.Text);
 
-        await using var check = new SqliteConnection($"Data Source={Path.Combine(_directory, "project.db")}");
+        await using var check = CreateUnpooledProjectConnection();
         await check.OpenAsync();
         var status = check.CreateCommand();
         status.CommandText = "SELECT status FROM ruby_annotations WHERE id = $id;";
@@ -1298,7 +1301,7 @@ public sealed class ProjectRepositoryTests : IDisposable
             await SaveAsync(secondAnnotationId, "different");
         }
 
-        await using (var connection = new SqliteConnection($"Data Source={Path.Combine(_directory, "project.db")}"))
+        await using (var connection = CreateUnpooledProjectConnection())
         {
             await connection.OpenAsync();
             var corruptLegacyState = connection.CreateCommand();
@@ -1322,6 +1325,13 @@ public sealed class ProjectRepositoryTests : IDisposable
                 inline => inline is RubyInline);
         }
     }
+
+    private SqliteConnection CreateUnpooledProjectConnection() =>
+        new(new SqliteConnectionStringBuilder
+        {
+            DataSource = Path.Combine(_directory, "project.db"),
+            Pooling = false,
+        }.ToString());
 
     public void Dispose()
     {

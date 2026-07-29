@@ -632,11 +632,17 @@ public sealed class RubyPackageAndExportTests : IDisposable
     {
         Directory.CreateDirectory(tempPath);
         var oversized = Path.Combine(tempPath, "oversized.png");
+        byte[] encoded;
         using (var image = new Mat(1600, 1600, MatType.CV_8UC3))
         {
             Cv2.Randu(image, Scalar.All(0), Scalar.All(256));
-            Assert.True(Cv2.ImWrite(oversized, image));
+            Cv2.ImEncode(
+                ".png",
+                image,
+                out encoded,
+                new ImageEncodingParam(ImwriteFlags.PngCompression, 0));
         }
+        await File.WriteAllBytesAsync(oversized, encoded);
         Assert.True(new FileInfo(oversized).Length > 3 * 1024 * 1024);
         var destination = Path.Combine(tempPath, "oversized-output");
 
@@ -650,6 +656,8 @@ public sealed class RubyPackageAndExportTests : IDisposable
         Assert.Contains("cover.png", error.Message, StringComparison.Ordinal);
         Assert.Contains("MB", error.Message, StringComparison.Ordinal);
         Assert.False(Directory.Exists(destination));
+        File.Delete(oversized);
+        Assert.False(File.Exists(oversized));
     }
 
     [Fact]
