@@ -56,10 +56,17 @@ public sealed class MainWindowLayoutTests
         Assert.True(
             source.IndexOf("DocxRubyOptions.TryCreate", StringComparison.Ordinal)
             < source.IndexOf("PrepareStructuredAsync", source.IndexOf("ExportDocx", StringComparison.Ordinal), StringComparison.Ordinal));
-        Assert.Contains(
-            "PageBreakBeforeChapters.IsChecked == true, \"游明朝\", rubyOptions, CancellationToken.None",
-            source,
-            StringComparison.Ordinal);
+        var exportStart = source.IndexOf("private async void ExportDocx", StringComparison.Ordinal);
+        var validatedWrite = source.IndexOf("ValidatedDocxWriter.WriteAsync", exportStart, StringComparison.Ordinal);
+        var exporter = source.IndexOf("new OpenXmlDocumentExporter().ExportAsync", validatedWrite, StringComparison.Ordinal);
+        var persist = source.IndexOf("PersistAfterSuccessfulOutputAsync", validatedWrite, StringComparison.Ordinal);
+        Assert.True(validatedWrite > exportStart);
+        Assert.True(exporter > validatedWrite);
+        Assert.True(persist > exporter);
+        var exporterCall = source[exporter..persist];
+        Assert.Contains("PageBreakBeforeChapters.IsChecked == true", exporterCall, StringComparison.Ordinal);
+        Assert.Contains("rubyOptions", exporterCall, StringComparison.Ordinal);
+        Assert.Contains("cancellationToken", exporterCall, StringComparison.Ordinal);
     }
 
     [Fact]
